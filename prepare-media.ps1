@@ -7,7 +7,7 @@ if (-not (Test-Path -LiteralPath $source)) {
     $local = Join-Path $PSScriptRoot '.tools\ffmpeg-download\ffmpeg.zip'
     if ((Test-Path -LiteralPath $local) -and (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash -eq $expected) { Copy-Item -LiteralPath $local -Destination $source }
     else {
-        try { Invoke-WebRequest 'https://github.com/akimicj/voicecon/releases/download/media-runtime-v1/ffmpeg-lgpl-win64.zip' -OutFile $source -Headers @{'User-Agent'='Voicecon-Build'} }
+        try { Invoke-WebRequest 'https://github.com/dservEXE/voicecon/releases/download/media-runtime-v1/ffmpeg-lgpl-win64.zip' -OutFile $source -Headers @{'User-Agent'='Voicecon-Build'} }
         catch { Invoke-WebRequest 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/assets/701810522' -OutFile $source -Headers @{'User-Agent'='Voicecon-Build';Accept='application/octet-stream'} }
     }
 }

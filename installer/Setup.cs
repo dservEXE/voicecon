@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Diagnostics;
 using System.Drawing;
@@ -20,8 +21,14 @@ internal static partial class Setup
     {
         if (args.Length == 2 && args[0] == "--verify")
         {
-            Directory.CreateDirectory(args[1]); Extract("Voicecon.Payload", Path.Combine(args[1], "Voicecon.exe")); Extract("Voicecon.Uninstall", Path.Combine(args[1], "Uninstall.exe"));
-            File.WriteAllText(Path.Combine(args[1], "verified.txt"), "Payloads extracted without installation, UI, startup changes or app launch."); return;
+            try
+            {
+                Directory.CreateDirectory(args[1]); Extract("Voicecon.Payload", Path.Combine(args[1], "Voicecon.exe")); Extract("Voicecon.Uninstall", Path.Combine(args[1], "Uninstall.exe"));
+                VerifyPortableCleanup(args[1]);
+                File.WriteAllText(Path.Combine(args[1], "verified.txt"), "Payloads, portable cleanup and rollback verified without installation, UI, startup changes or app launch.");
+            }
+            catch (Exception ex) { Environment.ExitCode = 1; Console.Error.WriteLine(ex); }
+            return;
         }
         if (args.Length > 0 && args[0] == "--update") { InstallUpdate(args); return; }
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
@@ -32,26 +39,29 @@ internal static partial class Setup
         using (var input = Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
         using (var output = File.Create(destination)) { if (input == null) throw new IOException("Missing embedded payload"); input.CopyTo(output); }
     }
-    private static void StopApp()
+    private static List<string> StopApp()
     {
+        var stopped = new List<string>();
         foreach (var process in Process.GetProcesses())
         {
             try
             {
-                if (!process.ProcessName.Equals("Voicecon", StringComparison.OrdinalIgnoreCase) && !process.ProcessName.StartsWith("Voicecon-", StringComparison.OrdinalIgnoreCase)) continue;
+                if (process.SessionId != Process.GetCurrentProcess().SessionId || (!process.ProcessName.Equals("Voicecon", StringComparison.OrdinalIgnoreCase) && !process.ProcessName.StartsWith("Voicecon-", StringComparison.OrdinalIgnoreCase))) continue;
                 var path = process.MainModule.FileName;
                 if (!string.Equals(FileVersionInfo.GetVersionInfo(path).ProductName, "Voicecon", StringComparison.OrdinalIgnoreCase)) continue;
                 var info = FileVersionInfo.GetVersionInfo(path);
                 if (info.FileMajorPart > 0 || info.FileMinorPart >= 3)
                 {
                     using (var command = Process.Start(new ProcessStartInfo(path, "--quit") { UseShellExecute = false, CreateNoWindow = true })) command.WaitForExit(2500);
-                    if (process.WaitForExit(1500)) continue;
+                    if (process.WaitForExit(1500)) { stopped.Add(path); continue; }
                 }
                 if (!process.HasExited) { process.Kill(); process.WaitForExit(3000); }
+                if (process.HasExited) stopped.Add(path);
             }
             catch { }
             finally { process.Dispose(); }
         }
+        return stopped;
     }
     private static void Shortcut(string location, string executable)
     {
@@ -80,16 +90,27 @@ internal static partial class Setup
         private void Install(object sender, EventArgs args)
         {
             install.Enabled = false; UseWaitCursor = true;
+            var stage = Path.Combine(InstallDirectory, "Voicecon.new");
+            var executable = Path.Combine(InstallDirectory, "Voicecon.exe");
+            var backup = Path.Combine(InstallDirectory, ".voicecon-previous");
+            bool replaced = false, committed = false, ownsMutex = false, targetExisted = false;
+            var mutex = new System.Threading.Mutex(false, "Local\\Voicecon-Installer-Update");
             try
             {
+                try { ownsMutex = mutex.WaitOne(0); } catch (System.Threading.AbandonedMutexException) { ownsMutex = true; }
+                if (!ownsMutex) throw new IOException("Другая установка Voicecon уже выполняется.");
                 Directory.CreateDirectory(InstallDirectory);
-                var stage = Path.Combine(InstallDirectory, "Voicecon.new"); Extract("Voicecon.Payload", stage);
+                Extract("Voicecon.Payload", stage);
                 using (var input = File.OpenRead(stage)) using (var hash = SHA256.Create())
                 {
                     var actual = BitConverter.ToString(hash.ComputeHash(input)).Replace("-", "");
                     if (actual != PayloadHash.Value) throw new IOException("Проверка файла приложения не прошла.");
                 }
-                StopApp(); var executable = Path.Combine(InstallDirectory, "Voicecon.exe"); File.Copy(stage, executable, true); File.Delete(stage);
+                var stopped = StopApp();
+                if (File.Exists(backup)) { if (!IsVoicecon(backup)) throw new IOException("Неожиданный файл резервного восстановления."); File.Delete(backup); }
+                targetExisted = File.Exists(executable);
+                if (targetExisted) File.Replace(stage, executable, backup); else File.Move(stage, executable);
+                replaced = true;
                 Extract("Voicecon.Uninstall", Path.Combine(InstallDirectory, "Uninstall.exe")); File.WriteAllText(Path.Combine(InstallDirectory, ".voicecon-install"), "Voicecon " + BuildInfo.Version);
                 using (var run = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run"))
                 { if (startup.Checked) run.SetValue("Voicecon", "\"" + executable + "\" --tray"); else run.DeleteValue("Voicecon", false); }
@@ -100,10 +121,18 @@ internal static partial class Setup
                 }
                 var startMenu = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs"); Directory.CreateDirectory(startMenu); Shortcut(Path.Combine(startMenu, "Voicecon.lnk"), executable);
                 if (desktop.Checked) Shortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Voicecon.lnk"), executable);
+                else foreach (var source in stopped) UpdateOwnedShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Voicecon.lnk"), source, executable);
                 if (launch.Checked) Process.Start(new ProcessStartInfo(executable) { UseShellExecute = false });
+                committed = true; TryDelete(backup);
+                foreach (var source in stopped) CleanupPortableSource(source, executable);
                 Close();
             }
-            catch (Exception ex) { status.Text = "Установка не завершена: " + ex.Message; install.Enabled = true; UseWaitCursor = false; }
+            catch (Exception ex)
+            {
+                if (replaced && !committed) RestoreApplication(backup, executable, targetExisted);
+                status.Text = "Установка не завершена: " + ex.Message; install.Enabled = true; UseWaitCursor = false;
+            }
+            finally { if (ownsMutex) { TryDelete(stage); mutex.ReleaseMutex(); } mutex.Dispose(); }
         }
     }
 }

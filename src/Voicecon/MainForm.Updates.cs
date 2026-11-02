@@ -25,7 +25,7 @@ public sealed partial class MainForm
     {
         AddRow(grid, Space(), 15); AddRow(grid, TextLabel("Обновления", 12, TextTone.Normal, true), 30);
         AddRow(grid, TextLabel("Установлена версия " + GitHubUpdater.CurrentVersion.ToString(3), 9, TextTone.Muted), 26);
-        PrepareLabel(updateStatus, TextTone.Muted); updateStatus.Font = UiTheme.Small; updateStatus.Text = "Источник: GitHub · akimicj/voicecon"; AddRow(grid, updateStatus, 44);
+        PrepareLabel(updateStatus, TextTone.Muted); updateStatus.Font = UiTheme.Small; updateStatus.Text = "Источник: GitHub · " + GitHubUpdater.Repository; AddRow(grid, updateStatus, 44);
         var actions = Columns(-45, 8, -55); PrepareButton(checkUpdate, "Проверить", UiIcon.Refresh); PrepareButton(installUpdate, "Обновить", UiIcon.Arrow, ButtonTone.Primary);
         actions.Controls.Add(checkUpdate, 0, 0); actions.Controls.Add(installUpdate, 2, 0); AddRow(grid, actions, 40);
         SetupToggle(autoUpdates, "Проверять обновления", "GitHub Releases · установка только по вашей кнопке", settings.CheckUpdates); AddRow(grid, autoUpdates, 58);

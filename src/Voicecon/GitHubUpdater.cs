@@ -10,7 +10,7 @@ public sealed record PreparedUpdate(GitHubRelease Release, string Directory, str
 
 public sealed class GitHubUpdater : IDisposable
 {
-    public const string Repository = "akimicj/voicecon";
+    public const string Repository = "dservEXE/voicecon";
     public const string InstallerName = "Voicecon-Setup.exe";
     public const long MaximumInstallerSize = 512L * 1024 * 1024;
     public static Version CurrentVersion => Normalize(typeof(MainForm).Assembly.GetName().Version ?? new Version(0, 0, 0));

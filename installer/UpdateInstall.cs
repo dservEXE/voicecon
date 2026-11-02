@@ -12,7 +12,7 @@ internal static partial class Setup
     private static bool IsVoicecon(string file) { return File.Exists(file) && FileVersionInfo.GetVersionInfo(file).ProductName == "Voicecon"; }
     private static void InstallUpdate(string[] args)
     {
-        string stage = null, backup = null, target = null, source = null, cleanup = null; bool replaced = false, launched = false, parentExited = false;
+        string stage = null, backup = null, target = null, source = null, cleanup = null; bool replaced = false, launched = false, parentExited = false, targetExisted = false;
         try
         {
             int pid;
@@ -23,7 +23,9 @@ internal static partial class Setup
             if (!string.Equals(Path.GetDirectoryName(cleanup), root, StringComparison.OrdinalIgnoreCase) || !Regex.IsMatch(Path.GetFileName(cleanup), "^[a-f0-9]{32}$") || (File.GetAttributes(cleanup) & FileAttributes.ReparsePoint) != 0 || !string.Equals(Path.GetFullPath(self), Path.Combine(cleanup, "Voicecon-Setup.exe"), StringComparison.OrdinalIgnoreCase) || !IsVoicecon(source)) throw new IOException("Не удалось проверить источник обновления.");
             using (var mutex = new System.Threading.Mutex(false, "Local\\Voicecon-Installer-Update"))
             {
-                if (!mutex.WaitOne(0)) throw new IOException("Установка обновления уже выполняется.");
+                bool acquired;
+                try { acquired = mutex.WaitOne(0); } catch (System.Threading.AbandonedMutexException) { acquired = true; }
+                if (!acquired) throw new IOException("Установка обновления уже выполняется.");
                 try
                 {
                     Directory.CreateDirectory(InstallDirectory); stage = Path.Combine(InstallDirectory, "Voicecon.new"); backup = Path.Combine(InstallDirectory, ".voicecon-previous"); target = Path.Combine(InstallDirectory, "Voicecon.exe");
@@ -41,7 +43,8 @@ internal static partial class Setup
                     catch (ArgumentException) { }
                     parentExited = true;
                     if (File.Exists(backup)) { if (!IsVoicecon(backup)) throw new IOException("Неожиданный файл резервного восстановления."); File.Delete(backup); }
-                    if (File.Exists(target)) File.Replace(stage, target, backup); else File.Move(stage, target); replaced = true;
+                    targetExisted = File.Exists(target);
+                    if (targetExisted) File.Replace(stage, target, backup); else File.Move(stage, target); replaced = true;
                     Extract("Voicecon.Uninstall", Path.Combine(InstallDirectory, "Uninstall.exe"));
                     File.WriteAllText(Path.Combine(InstallDirectory, ".voicecon-install"), "Voicecon " + BuildInfo.Version);
                     using (var run = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true))
@@ -58,21 +61,76 @@ internal static partial class Setup
                     var menu = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs"); Directory.CreateDirectory(menu); Shortcut(Path.Combine(menu, "Voicecon.lnk"), target);
                     Process.Start(new ProcessStartInfo(target, "--cleanup-update " + Quoted(cleanup) + " " + Process.GetCurrentProcess().Id) { UseShellExecute = false }); launched = true;
                     TryDelete(backup);
-                    if (!string.Equals(source, target, StringComparison.OrdinalIgnoreCase) && Regex.IsMatch(Path.GetFileName(source), "^Voicecon(?:-[0-9]+(?:\\.[0-9]+){1,3})?\\.exe$", RegexOptions.IgnoreCase)) TryDelete(source);
+                    CleanupPortableSource(source, target);
                 }
-                finally { mutex.ReleaseMutex(); }
+                catch
+                {
+                    if (replaced && !launched) RestoreApplication(backup, target, targetExisted);
+                    throw;
+                }
+                finally { if (stage != null) { TryDelete(stage); stage = null; } mutex.ReleaseMutex(); }
             }
         }
         catch (Exception ex)
         {
-            if (replaced && !launched && backup != null && File.Exists(backup)) { try { File.Replace(backup, target, null); } catch { } }
             MessageBox.Show("Обновление не установлено: " + ex.Message + "\nКонтакты и настройки сохранены.", "Voicecon", MessageBoxButtons.OK, MessageBoxIcon.Information);
             if (parentExited && !launched && source != null && IsVoicecon(source))
             { try { Process.Start(new ProcessStartInfo(source, "--cleanup-update " + Quoted(cleanup) + " " + Process.GetCurrentProcess().Id) { UseShellExecute = false }); } catch { } }
         }
-        finally { if (stage != null) TryDelete(stage); }
     }
     private static void TryDelete(string file) { try { if (file != null && File.Exists(file)) File.Delete(file); } catch { } }
+    private static void RestoreApplication(string backup, string target, bool targetExisted)
+    {
+        try
+        {
+            if (File.Exists(backup)) File.Replace(backup, target, null);
+            else if (!targetExisted && IsVoicecon(target)) File.Delete(target);
+        }
+        catch { }
+    }
+    private static void CleanupPortableSource(string source, string target)
+    {
+        try
+        {
+            source = Path.GetFullPath(source); target = Path.GetFullPath(target);
+            if (!string.Equals(source, target, StringComparison.OrdinalIgnoreCase) &&
+                Regex.IsMatch(Path.GetFileName(source), "^Voicecon(?:-[0-9]+(?:\\.[0-9]+){1,3})?\\.exe$", RegexOptions.IgnoreCase) &&
+                !HasReparseAncestor(source) && IsVoicecon(source)) File.Delete(source);
+        }
+        catch { }
+    }
+    private static bool HasReparseAncestor(string path)
+    {
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return true;
+        for (var directory = new DirectoryInfo(Path.GetDirectoryName(path)); directory != null; directory = directory.Parent)
+            if ((directory.Attributes & FileAttributes.ReparsePoint) != 0) return true;
+        return false;
+    }
+    private static void VerifyPortableCleanup(string directory)
+    {
+        var target = Path.Combine(directory, "Voicecon.exe");
+        var old = Path.Combine(directory, "Voicecon-0.5.0.exe");
+        var renamed = Path.Combine(directory, "custom-name.exe");
+        var unrelated = Path.Combine(directory, "Voicecon-99.0.exe");
+        var installed = Path.Combine(directory, "installed-copy.exe");
+        var backup = Path.Combine(directory, "rollback-copy.exe");
+        File.Copy(target, old, true); File.Copy(target, renamed, true);
+        File.WriteAllText(unrelated, "Unrelated user file");
+        try
+        {
+            CleanupPortableSource(target, target);
+            CleanupPortableSource(renamed, target);
+            CleanupPortableSource(unrelated, target);
+            CleanupPortableSource(old, target);
+            if (!File.Exists(target) || !File.Exists(renamed) || !File.Exists(unrelated) || File.Exists(old)) throw new IOException("Portable cleanup verification failed.");
+            File.Copy(target, backup, true); File.WriteAllText(installed, "Failed replacement");
+            RestoreApplication(backup, installed, true);
+            if (!IsVoicecon(installed) || File.Exists(backup)) throw new IOException("Existing installation rollback failed.");
+            RestoreApplication(backup, installed, false);
+            if (File.Exists(installed)) throw new IOException("First installation rollback failed.");
+        }
+        finally { TryDelete(old); TryDelete(renamed); TryDelete(unrelated); TryDelete(installed); TryDelete(backup); }
+    }
     private static void UpdateOwnedShortcut(string location, string oldPath, string target)
     {
         if (!File.Exists(location)) return;
