@@ -60,7 +60,7 @@ foreach ($candidate in $targets) {
 [long]$freed = 0
 foreach ($absolute in $validated) {
     $running = @(Get-Process -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Path } catch { } } | Where-Object { $_ })
-    if (@(@($running) + @($protected) | Where-Object {
+    if (@(@($running) + @($protected | Where-Object { $_ }) | Where-Object {
         [string]::Equals($_, $absolute, [StringComparison]::OrdinalIgnoreCase) -or
         $_.StartsWith($absolute + '\', [StringComparison]::OrdinalIgnoreCase)
     }).Count -gt 0) { Write-Host ('KEEP active or shortcut target: ' + $absolute); continue }
