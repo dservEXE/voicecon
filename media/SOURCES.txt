@@ -1,0 +1,12 @@
+Voicecon media helper: FFmpeg LGPLv3 shared build by BtbN, unmodified binaries.
+Release: ffmpeg-n9.0.2-45-g1e65c6cd5d-20261102
+Original ZIP SHA256: 35b004c78016bd7a141f3c4af10a49e1218c1ab65d6a62a78573679365a4c0ad
+FFmpeg source: https://github.com/FFmpeg/FFmpeg/tree/1e65c6cd5d3d2d12cbb374460dbf08bedf54772a
+Source archive: https://github.com/FFmpeg/FFmpeg/archive/1e65c6cd5d3d2d12cbb374460dbf08bedf54772a.tar.gz
+Build recipes/dependency sources: https://github.com/BtbN/FFmpeg-Builds/tree/5ece62897c650b863c1ddda7b6964845344aef2d
+Recipe: ./makeimage.sh win64 lgpl-shared 9.0 ; ./build.sh win64 lgpl-shared 9.0
+The scripts.d directory lists all dependent libraries, source URLs, revisions and patches.
+FFmpeg --buildconf records the actual enabled components. GPL-only and nonfree components are disabled.
+LGPL permits replacement and debugging of modified libraries; Voicecon imposes no restriction on this.
+To use a compatible modified FFmpeg, place ffmpeg.exe and its shared DLLs in media-runtime next to Voicecon.exe.
+No build of FFmpeg is downloaded while Voicecon is running. Automatic extraction uses only the embedded verified archive.

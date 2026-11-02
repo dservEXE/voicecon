@@ -1,0 +1,74 @@
+name: Build and publish Voicecon
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: voicecon-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: 10.0.403
+      - name: Read version
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content src/Voicecon/Voicecon.csproj
+          $version = [string]$project.Project.PropertyGroup.Version
+          "VERSION=$version" >> $env:GITHUB_ENV
+          gh release view "v$version" --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) { 'PUBLISHED=true' >> $env:GITHUB_ENV } else { 'PUBLISHED=false' >> $env:GITHUB_ENV }
+          exit 0
+      - name: Prepare verified media runtime
+        if: env.PUBLISHED == 'false'
+        shell: pwsh
+        run: ./prepare-media.ps1
+      - name: Preserve reviewed media source for future builds
+        if: env.PUBLISHED == 'false'
+        shell: pwsh
+        run: |
+          gh release view media-runtime-v1 --json tagName 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create media-runtime-v1 .tools/ffmpeg-lgpl-win64.zip --target $env:GITHUB_SHA --title 'Reviewed FFmpeg media source' --notes 'Pinned LGPL shared FFmpeg archive. See media/SOURCES.txt for sources and licenses.' --prerelease --latest=false
+            if ($LASTEXITCODE -ne 0) { throw 'Media source cache release failed.' }
+          }
+          exit 0
+      - name: Test update and audio logic
+        if: env.PUBLISHED == 'false'
+        shell: pwsh
+        run: |
+          dotnet run --project tests/Voicecon.Checks -c Release -- --update-checks
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --project tests/Voicecon.Checks -c Release --no-build -- --notification-checks
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --project tests/Voicecon.Checks -c Release --no-build -- --session-features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build executable and installer
+        if: env.PUBLISHED == 'false'
+        shell: pwsh
+        run: |
+          ./build.ps1
+          ./build-installer.ps1
+          $verify = Join-Path $PWD 'artifacts/setup-verify'
+          $process = Start-Process -FilePath ./artifacts/Voicecon-Setup.exe -ArgumentList @('--verify',('"'+$verify+'"')) -WindowStyle Hidden -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw 'Installer verification failed.' }
+          if ((Get-FileHash artifacts/Voicecon.exe).Hash -ne (Get-FileHash (Join-Path $verify Voicecon.exe)).Hash) { throw 'Installer payload mismatch.' }
+          $lines = Get-FileHash artifacts/Voicecon.exe,artifacts/Voicecon-Setup.exe -Algorithm SHA256 | ForEach-Object { $_.Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($_.Path) }
+          $lines | Set-Content artifacts/SHA256SUMS.txt -Encoding ascii
+      - name: Publish optional update
+        if: env.PUBLISHED == 'false'
+        shell: pwsh
+        run: |
+          gh release create "v$env:VERSION" artifacts/Voicecon-Setup.exe artifacts/Voicecon.exe artifacts/SHA256SUMS.txt --target $env:GITHUB_SHA --title "Voicecon $env:VERSION" --notes 'Windows x64. Install Voicecon-Setup.exe once; future updates are available inside Settings. Updates are optional. Profiles are preserved and previous installed versions are replaced.' --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
