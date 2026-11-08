@@ -43,7 +43,7 @@ public sealed class UiSounds : IDisposable
                     if (file.Length is <= 0 or > 10 * 1024 * 1024) throw new IOException();
                     if (custom is null || customPath != file.FullName || customStamp != file.LastWriteTimeUtc || customLength != file.Length)
                     {
-                        using WaveStream source = Path.GetExtension(file.Name).Equals(".mp3", StringComparison.OrdinalIgnoreCase) ? new Mp3FileReader(file.FullName) : new WaveFileReader(file.FullName);
+                        using WaveStream source = Path.GetExtension(file.Name).Equals(".mp3", StringComparison.OrdinalIgnoreCase) ? new Mp3FileReaderBase(file.FullName, format => new AcmMp3FrameDecompressor(format)) : new WaveFileReader(file.FullName);
                         ISampleProvider samples = source.ToSampleProvider();
                         if (samples.WaveFormat.Channels is not (1 or 2)) throw new InvalidDataException("Нужен моно или стерео WAV.");
                         if (samples.WaveFormat.SampleRate != 48000) samples = new WdlResamplingSampleProvider(samples, 48000);
@@ -100,7 +100,7 @@ public sealed class UiSounds : IDisposable
         try
         {
             using var stream = typeof(UiSounds).Assembly.GetManifestResourceStream(resourceName) ?? throw new FileNotFoundException(resourceName);
-            using var source = new Mp3FileReader(stream);
+            using var source = new Mp3FileReaderBase(stream, format => new AcmMp3FrameDecompressor(format));
             ISampleProvider samples = source.ToSampleProvider();
             if (samples.WaveFormat.Channels is not (1 or 2)) throw new InvalidDataException();
             if (samples.WaveFormat.SampleRate != 48000) samples = new WdlResamplingSampleProvider(samples, 48000);
