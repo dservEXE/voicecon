@@ -122,6 +122,7 @@ public sealed class ThemedFlowList : ThemedScrollHost
     private readonly BufferedPeople flow = new() { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Margin = Padding.Empty };
     public ThemedFlowList() { SetContent(flow); }
     [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)] public new ControlCollection Controls => flow.Controls;
+    [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)] public int ContentHeight => Math.Max(flow.Height, flow.GetPreferredSize(new Size(Math.Max(1, flow.Width), 0)).Height);
     [DefaultValue(true)] public bool WrapContents { get => flow.WrapContents; set => flow.WrapContents = value; }
 }
 

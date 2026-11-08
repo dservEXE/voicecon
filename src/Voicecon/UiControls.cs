@@ -114,6 +114,54 @@ public sealed class SoftButton : Button
     protected override void Dispose(bool disposing) { if (disposing) { UiMotion.Cancel(this); UiMotion.Cancel(pressTrack); } base.Dispose(disposing); }
 }
 
+public sealed class VoiceModeButton : Control
+{
+    private float hoverAmount;
+    private readonly object hoverTrack = new();
+    private bool selected;
+    public string Detail { get; set; } = "";
+    public bool Selected
+    {
+        get => selected;
+        set { if (selected == value) return; selected = value; Invalidate(); }
+    }
+    public VoiceModeButton()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Selectable | ControlStyles.Opaque | ControlStyles.ResizeRedraw, true);
+        BackColor = UiTheme.Current.Surface; Font = new Font("Segoe UI Semibold", 9.2f); Cursor = Cursors.Hand; Margin = Padding.Empty; TabStop = true; AccessibleRole = AccessibleRole.PushButton;
+    }
+    protected override void OnMouseEnter(EventArgs e) { AnimateHover(1); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { AnimateHover(0); base.OnMouseLeave(e); }
+    protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+    protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+    protected override void OnClick(EventArgs e) { Focus(); base.OnClick(e); }
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode is Keys.Space or Keys.Enter) { OnClick(EventArgs.Empty); e.Handled = e.SuppressKeyPress = true; }
+        base.OnKeyDown(e);
+    }
+    private void AnimateHover(float target)
+    {
+        var start = hoverAmount;
+        UiMotion.Run(hoverTrack, this, 140, p => { hoverAmount = start + (target - start) * p; Invalidate(); });
+    }
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        UiPainting.Fill(e.Graphics, ClientRectangle, Parent?.BackColor ?? UiTheme.Current.Surface);
+        if (Width < 2 || Height < 2) return;
+        var t = UiTheme.Current; var s = DeviceDpi / 96f; var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+        var fill = selected ? t.Accent : UiTheme.Blend(t.Field, t.Accent, hoverAmount * 0.12f);
+        using var path = UiTheme.Rounded(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 10 * s);
+        using var brush = new SolidBrush(fill); g.FillPath(brush, path);
+        using var border = new Pen(Focused && ShowFocusCues ? t.Accent : UiTheme.Blend(t.Border, t.Accent, selected ? 0.9f : hoverAmount * 0.8f), s); g.DrawPath(border, path);
+        var title = selected ? t.AccentInk : t.Text; var detail = selected ? UiTheme.Blend(t.AccentInk, t.Accent, 0.25f) : t.Muted;
+        var flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.PreserveGraphicsClipping | TextFormatFlags.PreserveGraphicsTranslateTransform;
+        TextRenderer.DrawText(g, Text, Font, new Rectangle((int)(5 * s), (int)(4 * s), Math.Max(1, Width - (int)(10 * s)), (int)(18 * s)), title, flags);
+        TextRenderer.DrawText(g, Detail, UiTheme.Small, new Rectangle((int)(5 * s), (int)(22 * s), Math.Max(1, Width - (int)(10 * s)), (int)(14 * s)), detail, flags);
+    }
+    protected override void Dispose(bool disposing) { if (disposing) UiMotion.Cancel(hoverTrack); base.Dispose(disposing); }
+}
+
 public sealed class ToggleRow : CheckBox
 {
     private float position;
@@ -121,7 +169,7 @@ public sealed class ToggleRow : CheckBox
     public ToggleRow()
     {
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque | ControlStyles.ResizeRedraw, true);
-        BackColor = UiTheme.Current.Surface; Cursor = Cursors.Hand; Margin = Padding.Empty; Font = UiTheme.Body;
+        AutoSize = false; BackColor = UiTheme.Current.Surface; Cursor = Cursors.Hand; Margin = Padding.Empty; Font = UiTheme.Body;
     }
     protected override void OnCheckedChanged(EventArgs e)
     {
@@ -133,7 +181,7 @@ public sealed class ToggleRow : CheckBox
         UiPainting.Fill(e.Graphics, ClientRectangle, BackColor);
         if (Width < 2 || Height < 2) return;
         var t = UiTheme.Current; var g = e.Graphics; var s = DeviceDpi / 96f; g.SmoothingMode = SmoothingMode.AntiAlias;
-        var track = new RectangleF(Width - 38 * s, (Height - 20 * s) / 2, 36 * s, 20 * s);
+        var track = new RectangleF(Width - 38 * s, 6 * s, 36 * s, 20 * s);
         using var path = UiTheme.Rounded(track, 10 * s); using var brush = new SolidBrush(UiTheme.Blend(t.Border, t.Accent, position)); g.FillPath(brush, path);
         using var knob = new SolidBrush(UiTheme.Blend(t.Muted, t.AccentInk, position)); g.FillEllipse(knob, track.X + (3 + 16 * position) * s, track.Y + 3 * s, 14 * s, 14 * s);
         var labelWidth = Math.Max(0, Width - (int)(52 * s));

@@ -5,8 +5,8 @@ namespace Voicecon;
 public sealed partial class MainForm
 {
     private enum TextTone { Normal, Muted, Accent }
-    private RowStyle? incomingRow, manualRow;
-    private bool manualExpanded;
+    private RowStyle? incomingRow, manualRow, participantRow;
+    private bool manualExpanded, fittingParticipantRow;
     private void BuildLayout()
     {
         SuspendLayout(); Text = "Voicecon · своя команда"; Font = UiTheme.Body; AutoScaleMode = AutoScaleMode.Dpi;
@@ -47,9 +47,14 @@ public sealed partial class MainForm
         heading.Controls.Add(statusBadge, 1, 0); AddRow(content, heading, 28);
         PrepareLabel(state); state.Font = UiTheme.Title; state.Text = "Соберите команду"; AddRow(content, state, 48);
         PrepareLabel(details, TextTone.Muted); details.Text = "Выберите друга и позвоните.\nДля первого знакомства обменяйтесь кодами VCF1."; details.Font = new Font("Segoe UI", 9.5f); AddRow(content, details, 50);
-        people.Dock = DockStyle.Fill; people.WrapContents = true; people.AutoScroll = false; people.Margin = Padding.Empty; AddRow(content, people, 64); var levels = new SoftButton { Text = "Громкость участников", Glyph = UiIcon.Headphones, Tone = ButtonTone.Quiet }; levels.Click += (_, _) => ShowParticipantSettings(); AddRow(content, levels, 32);
-        var modeRow = Columns(112, 10, -1); modeRow.Controls.Add(TextLabel("Режим звонка", 9, TextTone.Muted), 0, 0); PrepareCombo(voiceMode); voiceMode.Items.AddRange([new Choice("normal", "Обычный · 24 кбит/с"), new Choice("gaming", "Игровой · 16 кбит/с"), new Choice("economy", "Суперэкономичный · 8 кбит/с")]); voiceMode.SelectedIndex = (int)settings.AudioMode; modeRow.Controls.Add(voiceMode, 2, 0); AddRow(content, modeRow, 40);
-        AddRow(content, TextLabel("Игровой и суперэкономичный режимы экономят трафик.", 8.5f, TextTone.Muted), 22);
+        people.Dock = DockStyle.Fill; people.WrapContents = true; people.AutoScroll = false; people.Margin = Padding.Empty; AddRow(content, people, 64); participantRow = content.RowStyles[^1]; people.SizeChanged += (_, _) => ResizeParticipantRow();
+        var levels = new SoftButton { Text = "Громкость участников", Glyph = UiIcon.Headphones, Tone = ButtonTone.Quiet }; levels.Click += (_, _) => ShowParticipantSettings(); AddRow(content, levels, 32);
+        voiceModeNormal.Text = "Обычный"; voiceModeNormal.Detail = "24 кбит/с"; voiceModeNormal.Selected = settings.AudioMode == VoiceMode.Normal; voiceModeNormal.AccessibleName = "Обычный режим, 24 килобита в секунду"; voiceModeNormal.Dock = DockStyle.Fill;
+        voiceModeGaming.Text = "Игровой"; voiceModeGaming.Detail = "16 кбит/с"; voiceModeGaming.Selected = settings.AudioMode == VoiceMode.Gaming; voiceModeGaming.AccessibleName = "Игровой режим, 16 килобит в секунду"; voiceModeGaming.Dock = DockStyle.Fill;
+        voiceModeEconomy.Text = "Суперэкономичный"; voiceModeEconomy.Detail = "8 кбит/с"; voiceModeEconomy.Selected = settings.AudioMode == VoiceMode.Economy; voiceModeEconomy.AccessibleName = "Суперэкономичный режим, 8 килобит в секунду"; voiceModeEconomy.Dock = DockStyle.Fill;
+        tips.SetToolTip(voiceModeNormal, "Максимальное качество голоса · 24 кбит/с"); tips.SetToolTip(voiceModeGaming, "Снижает сетевую нагрузку · 16 кбит/с"); tips.SetToolTip(voiceModeEconomy, "Минимальный расход трафика · 8 кбит/с");
+        AddRow(content, TextLabel("Режим звонка", 9, TextTone.Muted, true), 22);
+        var modeRow = Columns(-1, 6, -1, 6, -1); modeRow.Controls.Add(voiceModeNormal, 0, 0); modeRow.Controls.Add(voiceModeGaming, 2, 0); modeRow.Controls.Add(voiceModeEconomy, 4, 0); AddRow(content, modeRow, 42);
         AddRow(content, TextLabel("ДРУЗЬЯ", 9, TextTone.Muted, true), 28);
         var friendRow = Columns(-1, 10, 135); PrepareCombo(friends); PrepareButton(callFriend, "Позвонить", UiIcon.Phone, ButtonTone.Primary); friendRow.Controls.Add(friends, 0, 0); friendRow.Controls.Add(callFriend, 2, 0); AddRow(content, friendRow, 42);
         var friendsActions = Columns(-50, 10, -50); PrepareButton(addFriend, "Добавить друга", UiIcon.Plus, ButtonTone.Quiet); PrepareButton(ownCard, "Мой код друга", UiIcon.Copy, ButtonTone.Quiet);
@@ -189,10 +194,19 @@ public sealed partial class MainForm
     private void RenderParticipants(VoiceRoom? current)
     {
         var names = current is not null && current.ConnectedCount > 0 ? current.ParticipantNames : new[] { settings.Name + " (вы)" };
-        var signature = string.Join("|", names) + UiTheme.Current.Id; if (signature == participantSignature) return; participantSignature = signature;
+        var signature = string.Join("|", names) + UiTheme.Current.Id; if (signature == participantSignature) { ResizeParticipantRow(); return; } participantSignature = signature;
         people.SuspendLayout(); foreach (Control old in people.Controls.Cast<Control>().ToArray()) old.Dispose();
         foreach (var value in names) people.Controls.Add(new Label { Text = "●  " + value.Replace(" · в сети", ""), AutoSize = true, MaximumSize = new Size(210, 0), Font = UiTheme.Small, ForeColor = UiTheme.Current.Text, BackColor = UiTheme.Current.Field, Padding = new Padding(8, 5, 8, 5), Margin = new Padding(0, 2, 6, 4) });
-        people.ResumeLayout(true);
+        people.ResumeLayout(true); ResizeParticipantRow();
+    }
+    private void ResizeParticipantRow()
+    {
+        if (participantRow is null || fittingParticipantRow) return;
+        var height = Math.Clamp(people.ContentHeight + 6, 64, 150);
+        if (Math.Abs(participantRow.Height - height) < 1) return;
+        fittingParticipantRow = true;
+        try { participantRow.Height = height; people.Parent?.PerformLayout(); }
+        finally { fittingParticipantRow = false; }
     }
     private void UpdateStatusBadge()
     {
