@@ -16,7 +16,7 @@ public sealed class Settings
     public string Theme { get; set; } = "graphite";
     public bool Animations { get; set; } = true;
     public bool StartWithWindows { get; set; } = true;
-    public string Ringtone { get; set; } = "bell";
+    public string Ringtone { get; set; } = "boris";
     public string RingtoneFile { get; set; } = "";
     public bool NotificationSounds { get; set; } = true;
     public string SignalingServer { get; set; } = "https://ntfy.sh";
@@ -62,6 +62,7 @@ public sealed class Settings
             var value = JsonSerializer.Deserialize<Settings>(json) ?? new();
             if (!schema.RootElement.TryGetProperty(nameof(ProfileDefaultsVersion), out _) || value.ProfileDefaultsVersion < 1 || string.IsNullOrWhiteSpace(value.Name)) value.Name = "Игрок";
             value.ProfileDefaultsVersion = 1;
+            if (value.Ringtone == "bell") value.Ringtone = "boris";
             value.Volume = Math.Clamp(value.Volume, 0, AudioLevels.MaximumPercent);
             value.MicrophoneGain = Math.Clamp(value.MicrophoneGain, 0, AudioLevels.MaximumPercent);
             if ((int)value.AudioMode is < 0 or > 2) value.AudioMode = VoiceMode.Normal;
@@ -86,4 +87,3 @@ public sealed class Settings
         File.Move(temporary, FilePath, true);
     }
 }
-

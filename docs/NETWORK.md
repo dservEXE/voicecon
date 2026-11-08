@@ -1,6 +1,6 @@
 # Как Voicecon соединяет компьютеры и работает с VPN
 
-Voicecon 0.6.6 использует WebRTC. Описание относится именно к этой сборке, а не ко всем приложениям на WebRTC.
+Voicecon 0.6.7 использует WebRTC. Описание относится именно к этой сборке, а не ко всем приложениям на WebRTC.
 
 ## Путь вызова и разговора
 
@@ -67,4 +67,3 @@ Voicecon 0.6.6 использует WebRTC. Описание относится 
 - [HttpClient.DefaultProxy: системная конфигурация](https://learn.microsoft.com/en-us/dotnet/api/system.net.http.httpclient.defaultproxy)
 - [Официальные Windows-заметки v2rayTun](https://github.com/LXST-CODE/v2RayTun/blob/main/windows/README.md)
 - Локальный код: `src/Voicecon/CallMailbox.cs`, `CallSession.cs`, `VoiceRoom.cs`, `InviteCode.cs`, `Contacts.cs`.
-

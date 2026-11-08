@@ -70,5 +70,5 @@ jobs:
         if: env.PUBLISHED == 'false'
         shell: pwsh
         run: |
-          gh release create "v$env:VERSION" artifacts/Voicecon-Setup.exe artifacts/Voicecon.exe artifacts/SHA256SUMS.txt --target $env:GITHUB_SHA --title "Voicecon $env:VERSION" --notes 'Windows x64. Install Voicecon-Setup.exe once; future updates are available inside Settings. Updates are optional. Profiles are preserved and previous installed versions are replaced.' --latest
+          gh release create "v$env:VERSION" artifacts/Voicecon-Setup.exe artifacts/Voicecon.exe artifacts/SHA256SUMS.txt --target $env:GITHUB_SHA --title "Voicecon $env:VERSION" --notes 'Windows x64. Install Voicecon-Setup.exe once; future updates appear as an optional highlighted banner in the app. Profiles are preserved and previous installed versions are replaced.' --latest
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }

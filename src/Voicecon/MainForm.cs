@@ -23,6 +23,7 @@ public sealed partial class MainForm : Form
     private DateTime lastSample = DateTime.UtcNow;
     private TimeSpan lastCpu;
     private long lastSent, lastReceived, lastRing;
+    private int lastConnectedCount;
     private PendingCall? incomingCall, outgoingCall;
     private readonly List<VoiceRoom.ChatLine> chatHistory = [];
     private Keys[] registeredKeys = [];
@@ -46,6 +47,7 @@ public sealed partial class MainForm : Form
     public MainForm(bool previewMode = false, string? previewTheme = null, bool startInTray = false)
     {
         if (previewMode) settings.Name = "Игрок";
+        UiSounds.WarmRingtones();
         this.previewMode = previewMode; this.startInTray = startInTray; windowRequested = !startInTray;
         if (!previewMode) settings.StartWithWindows = StartupManager.IsEnabled();
         UiTheme.Select(previewTheme ?? settings.Theme); UiMotion.Enabled = settings.Animations;
@@ -128,7 +130,7 @@ public sealed partial class MainForm : Form
         };
         animations.CheckedChanged += (_, _) => { settings.Animations = animations.Checked; UiMotion.Enabled = animations.Checked; if (!animations.Checked) UiMotion.FinishAll(); SaveSettings(); };
         notifications.CheckedChanged += (_, _) => { settings.NotificationSounds = notifications.Checked; if (!notifications.Checked) sounds.StopCue(); UpdateCallFeedback(); SaveSettings(); };
-        ringtones.SelectedIndexChanged += (_, _) => { settings.Ringtone = (ringtones.SelectedItem as Choice)?.Id ?? "bell"; SaveSettings(); };
+        ringtones.SelectedIndexChanged += (_, _) => { settings.Ringtone = (ringtones.SelectedItem as Choice)?.Id ?? "boris"; SaveSettings(); };
         micKey.Captured += (_, _) => ChangeHotkey(micKey, 0); earsKey.Captured += (_, _) => ChangeHotkey(earsKey, 1); openKey.Captured += (_, _) => ChangeHotkey(openKey, 2);
         foreach (var box in new[] { micKey, earsKey, openKey, screenKey, cameraKey })
         {
@@ -238,7 +240,10 @@ public sealed partial class MainForm : Form
         sounds.VolumePercent = settings.Volume;
         if (previewMode) return;
         callFeedback ??= new CallAudioFeedback(sounds);
-        callFeedback.Update(outgoingAnswered ? null : outgoingCall?.Id, room is { IsDisposed: false } current ? current.ConnectedCount : 0, settings.NotificationSounds, OutputDevice, Environment.TickCount64);
+        var connected = room is { IsDisposed: false } current ? current.ConnectedCount : 0;
+        if (lastConnectedCount > 0 && connected == 0 && settings.NotificationSounds) sounds.PlayCallEnded(OutputDevice);
+        lastConnectedCount = connected;
+        callFeedback.Update(outgoingAnswered ? null : outgoingCall?.Id, connected, settings.NotificationSounds, OutputDevice, Environment.TickCount64);
     }    private void PlayRingtone() { lastRing = Environment.TickCount64; sounds.PlayRing(settings.Ringtone, settings.RingtoneFile, OutputDevice); }
     private int OutputDevice => (speakers.SelectedItem as Device)?.Index ?? -1;
 
@@ -280,7 +285,10 @@ public sealed partial class MainForm : Form
     private void EndRoomOnly() { StopAllVideo(); room?.Dispose(); room = null; }
     private void EndCall()
     {
+        var wasConnected = lastConnectedCount > 0 || room is { ConnectedCount: > 0 };
         CancelOutgoing(); if (incomingCall is not null) RejectIncoming(); EndRoomOnly(); outgoing.Clear(); incoming.Clear();
+        lastConnectedCount = 0;
+        if (wasConnected && settings.NotificationSounds) sounds.PlayCallEnded(OutputDevice);
         lastSent = lastReceived = 0; SetStatus("Звонок завершён", "Можно снова позвонить другу или пригласить участников."); SetHint("Микрофон выключен до следующего соединения."); RefreshControls();
     }
     private void SendMessage()
@@ -421,4 +429,3 @@ public sealed partial class MainForm : Form
     private sealed record Choice(string Id, string Name) { public override string ToString() => Name; }
     private sealed record PendingCall(FriendCard Friend, string Id, string Code, DateTimeOffset Deadline);
 }
-

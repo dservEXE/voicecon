@@ -33,6 +33,32 @@ public sealed class SurfacePanel : Panel
     }
 }
 
+public sealed class UpdateBannerPanel : Panel
+{
+    public UpdateBannerPanel()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque | ControlStyles.ResizeRedraw, true);
+        Dock = DockStyle.Fill; Margin = Padding.Empty; Padding = new Padding(18, 12, 16, 12); BackColor = UiTheme.Current.Surface;
+    }
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        UiPainting.Fill(e.Graphics, ClientRectangle, Parent?.BackColor ?? UiTheme.Current.Background);
+        if (Width < 2 || Height < 2) return;
+        var t = UiTheme.Current; var scale = DeviceDpi / 96f;
+        var rect = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
+        using var path = UiTheme.Rounded(rect, 14 * scale);
+        using var fill = new SolidBrush(BackColor); using var border = new Pen(UiTheme.Blend(t.Border, t.Accent, 0.9f), scale);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias; e.Graphics.FillPath(fill, path); e.Graphics.DrawPath(border, path);
+        using var rail = new SolidBrush(t.Accent); using var railPath = UiTheme.Rounded(new RectangleF(2 * scale, 7 * scale, 4 * scale, Math.Max(1, Height - 14 * scale)), 2 * scale); e.Graphics.FillPath(rail, railPath);
+        if (t.Ornate)
+        {
+            using var inner = UiTheme.Rounded(new RectangleF(5 * scale, 5 * scale, Width - 10 * scale, Height - 10 * scale), 11 * scale);
+            using var innerBorder = new Pen(UiTheme.Blend(t.Border, t.Accent, 0.5f), scale); e.Graphics.DrawPath(innerBorder, inner);
+        }
+        base.OnPaint(e);
+    }
+}
+
 public enum ButtonTone { Secondary, Primary, Quiet, Danger }
 
 public sealed class SoftButton : Button

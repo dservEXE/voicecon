@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>Voicecon</AssemblyName>
-    <Version>0.6.6</Version>
+    <Version>0.6.7</Version>
     <ApplicationIcon>assets\voicecon.ico</ApplicationIcon>
     <Description>Голосовая связь для игр и конференций до 6 участников</Description>
     <ServerGarbageCollection>false</ServerGarbageCollection>
@@ -18,10 +18,11 @@
   <ItemGroup>
     <EmbeddedResource Include="..\..\THIRD-PARTY-NOTICES.txt" LogicalName="Voicecon.ThirdPartyNotices" />
     <EmbeddedResource Include="assets\media-runtime.zip" LogicalName="Voicecon.MediaRuntime" />
+    <EmbeddedResource Include="assets\ringtones\boris-flying-bird.mp3" LogicalName="Voicecon.Ringtone.Boris" />
+    <EmbeddedResource Include="assets\ringtones\bird-machine-jingle-bells.mp3" LogicalName="Voicecon.Ringtone.BirdMachine" />
     <EmbeddedResource Include="..\..\LICENSE" LogicalName="Voicecon.License" />
     <PackageReference Include="SIPSorcery" Version="10.0.17" />
     <PackageReference Include="NAudio.WinForms" Version="2.2.1" />
     <PackageReference Include="Concentus" Version="2.2.2" />
   </ItemGroup>
 </Project>
-

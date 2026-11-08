@@ -8,9 +8,14 @@ public sealed class UiSounds : IDisposable
     private static readonly NotificationClip[] cues = Enum.GetValues<NotificationCue>().Select(CreateClip).ToArray();
     private static readonly Lazy<NotificationClip> bell = new(() => NotificationClip.FromPcm16Mono(CreateRingtone(false)));
     private static readonly Lazy<NotificationClip> softRing = new(() => NotificationClip.FromPcm16Mono(CreateRingtone(true)));
+    private static readonly Lazy<NotificationClip> borisRing = new(() => CreateEmbeddedRingtone("Voicecon.Ringtone.Boris"));
+    private static readonly Lazy<NotificationClip> birdMachineRing = new(() => CreateEmbeddedRingtone("Voicecon.Ringtone.BirdMachine"));
     private static readonly Lazy<NotificationClip> dial = new(CreateDial);
+    private static readonly NotificationClip callEnded = CreateCallEnded();
     public void PlayDial(int outputDevice) => Start(dial.Value, outputDevice, true);
     public void PlayConnected(int outputDevice) => PlayCue(NotificationCue.CallConnected, outputDevice);
+    public void PlayCallEnded(int outputDevice) => Start(callEnded, outputDevice, false);
+    public static void WarmRingtones() => _ = Task.Run(() => { _ = borisRing.Value; _ = birdMachineRing.Value; });
     private readonly object gate = new();
     private readonly NotificationMixer mixer = new();
     public int VolumePercent { set => mixer.MasterGain = AudioLevels.Gain(value); }
@@ -26,7 +31,7 @@ public sealed class UiSounds : IDisposable
     private void PlayCue(NotificationCue cue, int outputDevice) => Start(cues[(int)cue], outputDevice, false);
     public void PlayRing(string kind, string customFile, int outputDevice)
     {
-        var clip = kind == "soft" ? softRing.Value : bell.Value;
+        var clip = kind switch { "boris" => borisRing.Value, "birdmachine" => birdMachineRing.Value, "soft" => softRing.Value, _ => bell.Value };
         if (kind == "custom")
         {
             try
@@ -38,7 +43,8 @@ public sealed class UiSounds : IDisposable
                     if (file.Length is <= 0 or > 10 * 1024 * 1024) throw new IOException();
                     if (custom is null || customPath != file.FullName || customStamp != file.LastWriteTimeUtc || customLength != file.Length)
                     {
-                        using var source = new WaveFileReader(file.FullName); ISampleProvider samples = source.ToSampleProvider();
+                        using WaveStream source = Path.GetExtension(file.Name).Equals(".mp3", StringComparison.OrdinalIgnoreCase) ? new Mp3FileReader(file.FullName) : new WaveFileReader(file.FullName);
+                        ISampleProvider samples = source.ToSampleProvider();
                         if (samples.WaveFormat.Channels is not (1 or 2)) throw new InvalidDataException("Нужен моно или стерео WAV.");
                         if (samples.WaveFormat.SampleRate != 48000) samples = new WdlResamplingSampleProvider(samples, 48000);
                         if (samples.WaveFormat.Channels == 1) samples = new MonoToStereoSampleProvider(samples);
@@ -89,6 +95,48 @@ public sealed class UiSounds : IDisposable
     public void Dispose() { lock (gate) { if (disposed) return; disposed = true; mixer.Clear(); CloseOutput(); custom = null; } }
 
     public static NotificationClip Clip(NotificationCue cue) => cues[(int)cue];
+    private static NotificationClip CreateEmbeddedRingtone(string resourceName)
+    {
+        try
+        {
+            using var stream = typeof(UiSounds).Assembly.GetManifestResourceStream(resourceName) ?? throw new FileNotFoundException(resourceName);
+            using var source = new Mp3FileReader(stream);
+            ISampleProvider samples = source.ToSampleProvider();
+            if (samples.WaveFormat.Channels is not (1 or 2)) throw new InvalidDataException();
+            if (samples.WaveFormat.SampleRate != 48000) samples = new WdlResamplingSampleProvider(samples, 48000);
+            if (samples.WaveFormat.Channels == 1) samples = new MonoToStereoSampleProvider(samples);
+            var data = new float[48000 * 2 * 8]; var count = 0;
+            while (count < data.Length)
+            {
+                var read = samples.Read(data, count, data.Length - count);
+                if (read <= 0) break;
+                count += read;
+            }
+            if (count == 0) throw new InvalidDataException();
+            Array.Resize(ref data, count);
+            for (var i = 0; i < data.Length; i++) data[i] *= 0.42f;
+            return new NotificationClip(data);
+        }
+        catch { return bell.Value; }
+    }
+    private static NotificationClip CreateCallEnded()
+    {
+        const int frames = 18720;
+        var data = new float[frames * 2];
+        void Note(double startMs, double durationMs, double frequency)
+        {
+            var start = (int)(startMs * 48); var length = (int)(durationMs * 48);
+            for (var i = 0; i < length && start + i < frames; i++)
+            {
+                var attack = NotificationClip.Smooth(Math.Min(1, i / 288d));
+                var release = NotificationClip.Smooth(Math.Min(1, (length - 1 - i) / 576d));
+                var sample = (float)(Math.Sin(i * 2 * Math.PI * frequency / 48000) * 0.115 * attack * release);
+                data[(start + i) * 2] += sample; data[(start + i) * 2 + 1] += sample;
+            }
+        }
+        Note(0, 100, 698.46); Note(125, 180, 523.25);
+        return new NotificationClip(data);
+    }
     private static NotificationClip CreateClip(NotificationCue cue)
     {
         var frames = cue == NotificationCue.CallConnected ? 18720 : cue is NotificationCue.MicrophoneOn or NotificationCue.MicrophoneOff ? 7440 : 11520;

@@ -15,6 +15,7 @@ public static class UiPainting
         {
             child.BackColor = child switch
             {
+                UpdateBannerPanel => UiTheme.Blend(t.Surface, t.Accent, t.Id == "porcelain" ? 0.2f : 0.34f),
                 SurfacePanel surface => surface.Recessed ? t.Field : t.Surface,
                 TextBoxBase => t.Field,
                 PictureBox => Color.Black,
