@@ -326,13 +326,13 @@ public sealed partial class MainForm : Form
         try
         {
             friends.Items.Clear();
-            if (contacts is not null) foreach (var friend in contacts.Friends) friends.Items.Add(new FriendChoice(friend.Name, friend));
+            if (contacts is not null) foreach (var contact in contacts.Friends) friends.Items.Add(new FriendChoice(contact.Name, contact));
             if (friends.Items.Count == 0) friends.Items.Add(new FriendChoice("Сначала добавьте друга", null));
             friends.SelectedIndex = Math.Max(0, friends.Items.Cast<FriendChoice>().ToList().FindIndex(f => f.Friend?.Id == selected));
         }
         finally { refreshingFriends = false; }
-        if (friends.SelectedItem is FriendChoice { Friend: { } friend } && settings.LastFriendId != friend.Id)
-        { settings.LastFriendId = friend.Id; SaveSettings(); }
+        if (friends.SelectedItem is FriendChoice { Friend: { } chosen } && settings.LastFriendId != chosen.Id)
+        { settings.LastFriendId = chosen.Id; SaveSettings(); }
         RefreshControls();
     }
 
