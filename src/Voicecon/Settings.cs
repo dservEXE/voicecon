@@ -36,6 +36,7 @@ public sealed class Settings
     public bool NoiseGate { get; set; } = true;
     public bool NoiseSuppression { get; set; } = true;
     public VoiceMode AudioMode { get; set; } = VoiceMode.Normal;
+    public string LastFriendId { get; set; } = "";
     public int Volume { get; set; } = 100;
     public int MicrophoneGain { get; set; } = 100;
     public string StunUrl { get; set; } = "stun:stun.cloudflare.com:3478";

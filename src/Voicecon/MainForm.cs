@@ -8,7 +8,7 @@ public sealed partial class MainForm : Form
 {
     private readonly Settings settings = Settings.Load();
     private readonly bool previewMode, startInTray;
-    private bool windowRequested, initialized, quitting, busy, isMuted, isDeafened, balloonShown;
+    private bool windowRequested, initialized, quitting, busy, isMuted, isDeafened, balloonShown, refreshingFriends;
     private VoiceRoom? room;
     private ContactBook? contacts;
     private CallMailbox? mailbox;
@@ -115,7 +115,12 @@ public sealed partial class MainForm : Form
         volume.ValueChanged += (_, _) => { UpdateAudioOptions(); SaveSettings(); };
         name.Leave += (_, _) => SaveSettings();
         microphones.SelectedIndexChanged += (_, _) => SaveSettings(); speakers.SelectedIndexChanged += (_, _) => SaveSettings();
-        friends.SelectedIndexChanged += (_, _) => RefreshControls();
+        friends.SelectedIndexChanged += (_, _) =>
+        {
+            if (!refreshingFriends && friends.SelectedItem is FriendChoice { Friend: { } friend } && settings.LastFriendId != friend.Id)
+            { settings.LastFriendId = friend.Id; SaveSettings(); }
+            RefreshControls();
+        };
         startup.CheckedChanged += (_, _) =>
         {
             try { StartupManager.SetEnabled(startup.Checked); settings.StartWithWindows = startup.Checked; SaveSettings(); }
@@ -316,10 +321,18 @@ public sealed partial class MainForm : Form
     }
     private void RefreshFriends(string? selected = null)
     {
-        selected ??= (friends.SelectedItem as FriendChoice)?.Friend?.Id; friends.Items.Clear();
-        if (contacts is not null) foreach (var friend in contacts.Friends) friends.Items.Add(new FriendChoice(friend.Name, friend));
-        if (friends.Items.Count == 0) friends.Items.Add(new FriendChoice("Сначала добавьте друга", null));
-        friends.SelectedIndex = Math.Max(0, friends.Items.Cast<FriendChoice>().ToList().FindIndex(f => f.Friend?.Id == selected));
+        selected ??= (friends.SelectedItem as FriendChoice)?.Friend?.Id ?? settings.LastFriendId;
+        refreshingFriends = true;
+        try
+        {
+            friends.Items.Clear();
+            if (contacts is not null) foreach (var friend in contacts.Friends) friends.Items.Add(new FriendChoice(friend.Name, friend));
+            if (friends.Items.Count == 0) friends.Items.Add(new FriendChoice("Сначала добавьте друга", null));
+            friends.SelectedIndex = Math.Max(0, friends.Items.Cast<FriendChoice>().ToList().FindIndex(f => f.Friend?.Id == selected));
+        }
+        finally { refreshingFriends = false; }
+        if (friends.SelectedItem is FriendChoice { Friend: { } friend } && settings.LastFriendId != friend.Id)
+        { settings.LastFriendId = friend.Id; SaveSettings(); }
         RefreshControls();
     }
 

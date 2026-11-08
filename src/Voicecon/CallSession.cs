@@ -166,10 +166,10 @@ public sealed class CallSession : IDisposable
     public void SetVoiceMode(VoiceMode mode)
     {
         lowPriorityMode = mode is VoiceMode.Gaming or VoiceMode.Economy;
-        ApplyGamingTrafficPriority();
+        ApplyVoiceTrafficPriority();
     }
 
-    private void ApplyGamingTrafficPriority()
+    private void ApplyVoiceTrafficPriority()
     {
         if (disposed) return;
         try
@@ -239,7 +239,7 @@ public sealed class CallSession : IDisposable
         }
         finally { peer.onicegatheringstatechange -= Changed; }
         lifetime.Token.ThrowIfCancellationRequested();
-        ApplyGamingTrafficPriority();
+        ApplyVoiceTrafficPriority();
     }
 
     public void Dispose()
