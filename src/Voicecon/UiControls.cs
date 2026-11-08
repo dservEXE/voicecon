@@ -119,7 +119,8 @@ public sealed class VoiceModeButton : Control
     private float hoverAmount;
     private readonly object hoverTrack = new();
     private bool selected;
-    public string Detail { get; set; } = "";
+    [DefaultValue("")] public string Detail { get; set; } = "";
+    [DefaultValue(false)]
     public bool Selected
     {
         get => selected;
