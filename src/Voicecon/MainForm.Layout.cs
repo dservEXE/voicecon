@@ -31,7 +31,7 @@ public sealed partial class MainForm
         controls.Controls.Add(mute, 0, 0); controls.Controls.Add(deafen, 2, 0); controls.Controls.Add(end, 4, 0); bar.Controls.Add(controls); AddRow(root, bar, 68);
         PrepareLabel(shortcutHint, TextTone.Muted); shortcutHint.Font = UiTheme.Small; UpdateShortcutHint(); AddRow(root, shortcutHint, 24);
         PrepareLabel(hint, TextTone.Muted); hint.Font = UiTheme.Small; hint.Text = "Добавьте друг друга по коду VCF1 один раз — дальше звоните кнопкой."; AddRow(root, hint, 24);
-        var footer = Columns(-1, 100, 250); pingButton.Dock = DockStyle.Fill; pingButton.Click += (_, _) => ShowLatency(); PrepareLabel(metrics, TextTone.Muted); metrics.Font = UiTheme.Small; metrics.Text = "CPU —    RAM —    ↑— ↓— кбит/с";
+        var footer = Columns(-1, 168, 250); pingButton.Dock = DockStyle.Fill; pingButton.Click += (_, _) => ShowLatency(); PrepareLabel(metrics, TextTone.Muted); metrics.Font = UiTheme.Small; metrics.Text = "CPU —    RAM —    ↑— ↓— кбит/с";
         PrepareLabel(delivery, TextTone.Muted); delivery.Font = UiTheme.Small; delivery.TextAlign = ContentAlignment.MiddleRight; delivery.Text = previewMode ? "●  Доставка звонков" : "●  Подключаемся…";
         footer.Controls.Add(metrics, 0, 0); footer.Controls.Add(pingButton, 1, 0); footer.Controls.Add(delivery, 2, 0); AddRow(root, footer, 24);
         tips.SetToolTip(copy, "Копировать весь код подключения"); tips.SetToolTip(ownCard, "Скопировать постоянный код своего контакта");
@@ -208,3 +208,4 @@ public sealed partial class MainForm
     }
     private void ApplyTitleBar() => WindowTheme.Apply(this);
 }
+

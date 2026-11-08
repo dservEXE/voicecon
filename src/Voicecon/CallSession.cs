@@ -22,19 +22,42 @@ public sealed class CallSession : IDisposable
     public event Action? ControlReady;
     public event Action<string>? ControlMessage;
     public RTCPeerConnectionState State => peer.connectionState;
+    public string? ConnectionRoute
+    {
+        get
+        {
+            if (disposed || State != RTCPeerConnectionState.connected) return null;
+            try
+            {
+                var pair = peer.GetRtpChannel().NominatedEntry;
+                if (pair is null || !pair.Nominated) return null;
+                return pair.LocalCandidate.type == RTCIceCandidateType.relay || pair.RemoteCandidate.type == RTCIceCandidateType.relay
+                    ? "TURN" : "P2P";
+            }
+            catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException) { return null; }
+        }
+    }
     public bool IsOffer { get; private set; }
     public long SentBytes => Interlocked.Read(ref sentBytes);
     public long ReceivedBytes => Interlocked.Read(ref receivedBytes);
 
     public CallSession(Settings settings, bool localOnly = false)
     {
+        var route = localOnly ? "auto" : settings.ConnectionRoute;
+        var useTurn = route is "auto" or "relay";
+        if (!localOnly && route == "relay" && string.IsNullOrWhiteSpace(settings.TurnUrl))
+            throw new InvalidOperationException("Для маршрута через TURN укажите сервер в настройках сети.");
         var servers = new List<RTCIceServer>();
         if (!localOnly && !string.IsNullOrWhiteSpace(settings.StunUrl)) servers.Add(new() { urls = settings.StunUrl.Trim() });
-        if (!localOnly && !string.IsNullOrWhiteSpace(settings.TurnUrl)) servers.Add(new()
+        if (!localOnly && useTurn && !string.IsNullOrWhiteSpace(settings.TurnUrl)) servers.Add(new()
         {
             urls = settings.TurnUrl.Trim(), username = settings.TurnUser, credential = settings.TurnPassword
         });
-        peer = new RTCPeerConnection(new RTCConfiguration { iceServers = servers });
+        peer = new RTCPeerConnection(new RTCConfiguration
+        {
+            iceServers = servers,
+            iceTransportPolicy = route == "relay" && !localOnly ? RTCIceTransportPolicy.relay : RTCIceTransportPolicy.all
+        });
         peer.ondatachannel += channel => { if (channel.label == "voicecon-video") AttachVideo(channel); else if (channel.label == "voicecon-share-audio") AttachShareAudio(channel); else AttachControl(channel); };
         peer.addTrack(new MediaStreamTrack(new List<AudioFormat>
         {
@@ -182,3 +205,4 @@ public sealed class CallSession : IDisposable
         lifetime.Dispose();
     }
 }
+

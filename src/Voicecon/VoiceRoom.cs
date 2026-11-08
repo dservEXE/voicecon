@@ -44,6 +44,18 @@ public sealed class VoiceRoom : IDisposable
         .Concat(roster.Where(p => p.Key != id).Select(p => p.Value + (members.TryGetValue(p.Key, out var m) && m.Connected ? " · в сети" : " · соединяем…"))).ToList();
     public sealed record ParticipantAudio(string Id, string Name, int VoicePercent, int SharePercent) { public override string ToString() => Name; }
     public IReadOnlyList<ParticipantAudio> Participants => members.Values.Where(m => m.Connected).Select(m => new ParticipantAudio(m.Id, m.Name, m.VoiceVolume, m.ShareVolume)).ToArray();
+    public IReadOnlyList<(string Name, string Route)> ConnectionRoutes
+    {
+        get
+        {
+            var active = members.Values.Where(m => m.Connected).ToArray();
+            return active.Select(m =>
+            (
+                active.Count(other => other.Name == m.Name) > 1 ? m.Name + " · " + m.Id[..4] : m.Name,
+                m.Session.ConnectionRoute ?? "Определяется"
+            )).ToArray();
+        }
+    }
     public void SetParticipantVolume(string peerId, int voicePercent, int sharePercent)
     {
         if (!members.TryGetValue(peerId, out var member) || disposed) return;
@@ -375,3 +387,4 @@ public sealed class VoiceRoom : IDisposable
         public Dictionary<string, string>? Peers { get; set; }
     }
 }
+

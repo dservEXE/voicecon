@@ -37,6 +37,7 @@ public sealed class Settings
     public int MicrophoneGain { get; set; } = 100;
     public string StunUrl { get; set; } = "stun:stun.cloudflare.com:3478";
     public string TurnUrl { get; set; } = "";
+    public string ConnectionRoute { get; set; } = "auto";
     public string TurnUser { get; set; } = "";
     public string ProtectedTurnPassword { get; set; } = "";
     [System.Text.Json.Serialization.JsonIgnore]
@@ -59,6 +60,7 @@ public sealed class Settings
             value.ProfileDefaultsVersion = 1;
             value.Volume = Math.Clamp(value.Volume, 0, AudioLevels.MaximumPercent);
             value.MicrophoneGain = Math.Clamp(value.MicrophoneGain, 0, AudioLevels.MaximumPercent);
+            if (value.ConnectionRoute is not ("auto" or "direct" or "relay")) value.ConnectionRoute = "auto";
             if (value.ProtectedTurnPassword.Length > 0)
             {
                 try { value.TurnPassword = Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(value.ProtectedTurnPassword), null, DataProtectionScope.CurrentUser)); }
@@ -79,3 +81,4 @@ public sealed class Settings
         File.Move(temporary, FilePath, true);
     }
 }
+

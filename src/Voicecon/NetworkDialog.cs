@@ -6,7 +6,7 @@ public sealed class NetworkDialog : ThemedDialog
     public NetworkDialog(Settings settings)
     {
         var t = UiTheme.Current;
-        Text = "Voicecon · настройки сети"; ClientSize = new Size(560, 590); Font = UiTheme.Body;
+        Text = "Voicecon · настройки сети"; ClientSize = new Size(560, 680); Font = UiTheme.Body;
         BackColor = t.Background; ForeColor = t.Text; brandIcon = BrandIcon.Create(); Icon = brandIcon;
         FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false; StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -17,7 +17,11 @@ public sealed class NetworkDialog : ThemedDialog
         Add(root, Caption("Обычно всё работает автоматически. Свой TURN-сервер\nнужен, если сеть не пропускает прямое соединение.", 9.5f, t.Muted), 52);
         var surface = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(18, 12, 18, 12) };
         var fields = new BufferedGrid { Dock = DockStyle.Fill, ColumnCount = 1, Margin = Padding.Empty };
-        surface.Controls.Add(fields); Add(root, surface, 350);
+        surface.Controls.Add(fields); Add(root, surface, 430);
+        Add(fields, Caption("Маршрут звонка", 9, t.Muted), 26);
+        var route = new ThemedComboBox(); route.Items.AddRange(["Автоматически", "Напрямую", "Через TURN"]);
+        route.SelectedIndex = settings.ConnectionRoute switch { "direct" => 1, "relay" => 2, _ => 0 };
+        Add(fields, route, 36); Add(fields, Caption("Для режима TURN укажите сервер ниже.", 8.5f, t.Muted), 22);
         var values = new[] { settings.StunUrl, settings.TurnUrl, settings.TurnUser, settings.TurnPassword, settings.SignalingServer };
         var labels = new[] { "STUN-сервер", "TURN-сервер · необязательно", "Логин TURN", "Пароль TURN · защищён учётной записью Windows", "Доставка входящих · сервер ntfy по HTTPS" }; var inputs = new TextBox[5];
         for (var i = 0; i < 5; i++)
@@ -40,9 +44,13 @@ public sealed class NetworkDialog : ThemedDialog
             { MessageBox.Show(this, "Адрес STUN должен начинаться с stun:"); return; }
             if (inputs[1].Text.Trim().Length > 0 && !inputs[1].Text.Trim().StartsWith("turn:", StringComparison.OrdinalIgnoreCase))
             { MessageBox.Show(this, "Укажите TURN по UDP: turn:адрес:порт"); return; }
+            if (route.SelectedIndex == 2 && inputs[1].Text.Trim().Length == 0)
+            { MessageBox.Show(this, "Для маршрута через TURN укажите адрес TURN-сервера."); return; }
             if (!Uri.TryCreate(inputs[4].Text.Trim(), UriKind.Absolute, out var server) || server.Scheme != "https" || server.UserInfo.Length != 0 || server.Query.Length != 0 || server.Fragment.Length != 0)
             { MessageBox.Show(this, "Для доставки входящих нужен HTTPS-адрес сервера ntfy."); return; }
-            settings.StunUrl = inputs[0].Text.Trim(); settings.TurnUrl = inputs[1].Text.Trim(); settings.TurnUser = inputs[2].Text.Trim(); settings.TurnPassword = inputs[3].Text;
+            settings.StunUrl = inputs[0].Text.Trim(); settings.TurnUrl = inputs[1].Text.Trim();
+            settings.ConnectionRoute = route.SelectedIndex switch { 1 => "direct", 2 => "relay", _ => "auto" };
+            settings.TurnUser = inputs[2].Text.Trim(); settings.TurnPassword = inputs[3].Text;
             settings.SignalingServer = inputs[4].Text.Trim().TrimEnd('/');
             DialogResult = DialogResult.OK; Close();
         };
@@ -59,3 +67,4 @@ public sealed class NetworkDialog : ThemedDialog
     }
     protected override void Dispose(bool disposing) { if (disposing) brandIcon.Dispose(); base.Dispose(disposing); }
 }
+

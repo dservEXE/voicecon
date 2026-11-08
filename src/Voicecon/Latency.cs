@@ -73,12 +73,20 @@ public sealed partial class MainForm
         var peers = room?.SampleLatency() ?? [];
         latency.Add(DateTimeOffset.UtcNow, peers);
         var values = peers.Where(p => p.Ping.HasValue).Select(p => p.Ping!.Value).ToArray();
-        pingButton.Text = values.Length > 0 ? $"{values.Max():0} мс ▱" : "Пинг — ▱";
+        var routes = room?.ConnectionRoutes.Select(p => p.Route).Distinct().ToArray() ?? [];
+        var route = routes.Length switch { 1 => routes[0], > 1 => "разные пути", _ => "маршрут…" };
+        pingButton.Text = values.Length > 0 ? $"{values.Max():0} мс · {route} ▱" : $"Пинг — · {route} ▱";
         if (latencyGraph is { IsDisposed: false }) latencyGraph.Invalidate();
     }
     private void ShowLatency()
     {
-        using var dialog = new ThemedDialog { Text = "Задержка соединения · последние 2 минуты", ClientSize = new Size(640, 340), MinimumSize = new Size(440, 260), StartPosition = FormStartPosition.CenterParent, BackColor = UiTheme.Current.Surface, Icon = Icon };
-        latencyGraph = new LatencyGraph(latency); dialog.Controls.Add(latencyGraph); dialog.ShowDialog(this); latencyGraph = null;
+        using var dialog = new ThemedDialog { Text = "Задержка соединения · последние 2 минуты", ClientSize = new Size(640, 370), MinimumSize = new Size(440, 290), StartPosition = FormStartPosition.CenterParent, BackColor = UiTheme.Current.Surface, Icon = Icon };
+        var content = Grid(1, new Padding(14)); dialog.Controls.Add(content);
+        var routes = room?.ConnectionRoutes ?? [];
+        var routeText = routes.Count == 0 ? "Маршрут появится после подключения." : string.Join("   ·   ", routes.Select(p => $"{p.Name}: {p.Route}"));
+        var routeLabel = TextLabel(routeText, 9, TextTone.Muted); routeLabel.AutoEllipsis = true; AddRow(content, routeLabel, 28);
+        latencyGraph = new LatencyGraph(latency); AddRow(content, latencyGraph, 0); content.RowStyles[^1].SizeType = SizeType.Percent; content.RowStyles[^1].Height = 100;
+        dialog.ShowDialog(this); latencyGraph = null;
     }
 }
+
