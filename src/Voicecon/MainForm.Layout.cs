@@ -20,7 +20,7 @@ public sealed partial class MainForm
         PrepareButton(callNav, "Звонок", UiIcon.Phone, ButtonTone.Primary); PrepareButton(videoNav, "Видео", UiIcon.Palette); PrepareButton(settingsNav, "Настройки", UiIcon.Sliders);
         callNav.Margin = new Padding(0, 8, 8, 8); videoNav.Margin = new Padding(0, 8, 8, 8); settingsNav.Margin = new Padding(0, 8, 0, 8);
         header.Controls.Add(callNav, 2, 0); header.Controls.Add(videoNav, 3, 0); header.Controls.Add(settingsNav, 4, 0); AddRow(root, header, 62);
-        AddRow(root, Space(), 16); AddRow(root, BuildUpdateBanner(), 0); updateBannerRow = root.RowStyles[^1];
+        AddRow(root, Space(), 16);
         pages.Dock = DockStyle.Fill; pages.Margin = Padding.Empty; AddRow(root, pages, 0); root.RowStyles[^1].SizeType = SizeType.Percent; root.RowStyles[^1].Height = 100;
         callPage = BuildCallPage(); settingsPage = BuildSettingsPage(); videoPage = BuildVideoPage();
         pages.Controls.Add(callPage); pages.Controls.Add(settingsPage); pages.Controls.Add(videoPage); settingsPage.Visible = videoPage.Visible = false;
@@ -71,7 +71,10 @@ public sealed partial class MainForm
         AddRow(codes, CodeRow(outgoing, copy, 44), 42); AddRow(codes, TextLabel("КОД ДРУГА · приглашение или ответ", 8.5f, TextTone.Muted), 24);
         incoming.Multiline = true; incoming.MaxLength = 24000; incoming.PlaceholderText = "Вставьте полный код VC1.…"; incoming.Font = UiTheme.Code; PrepareButton(apply, "Применить", UiIcon.Arrow); AddRow(codes, CodeRow(incoming, apply, 120), 42);
         AddRow(content, manualPanel, 0); manualRow = content.RowStyles[^1]; manualPanel.Visible = false;
-        body.Controls.Add(roomCard, 0, 0); body.Controls.Add(BuildChatPanel(), 2, 0); return body;
+        body.Controls.Add(roomCard, 0, 0); body.Controls.Add(BuildChatPanel(), 2, 0);
+        body.Dock = DockStyle.Fill;
+        var page = Grid(1); page.Dock = DockStyle.Fill; AddRow(page, BuildUpdateBanner(), 0); updateBannerRow = page.RowStyles[^1]; AddRow(page, Space(), 12); AddRow(page, body, 0); page.RowStyles[^1].SizeType = SizeType.Percent; page.RowStyles[^1].Height = 100;
+        return page;
     }
     private Control BuildChatPanel()
     {
