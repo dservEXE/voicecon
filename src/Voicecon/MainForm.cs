@@ -32,7 +32,7 @@ public sealed partial class MainForm : Form
     private readonly TextBox outgoing = new(), incoming = new(), name = new(), chatInput = new();
     private readonly RichTextBox chatLog = new();
     private readonly SoftButton create = new(), apply = new(), copy = new(), end = new(), mute = new(), deafen = new(), network = new(), refresh = new(), callFriend = new(), addFriend = new(), ownCard = new(), acceptCall = new(), rejectCall = new(), sendChat = new(), emoji = new(), settingsNav = new(), callNav = new();
-    private readonly ThemedComboBox microphones = new(), speakers = new(), talkKey = new(), themes = new(), friends = new(), ringtones = new();
+    private readonly ThemedComboBox microphones = new(), speakers = new(), talkKey = new(), themes = new(), friends = new(), ringtones = new(), voiceMode = new();
     private readonly ToggleRow ptt = new(), noise = new(), gate = new(), startup = new(), animations = new(), notifications = new();
     private readonly HotkeyBox micKey = new(), earsKey = new(), openKey = new();
     private readonly SlimSlider volume = new();
@@ -106,6 +106,11 @@ public sealed partial class MainForm : Form
             if (dialog.ShowDialog(this) == DialogResult.OK) { SaveSettings(); if (oldServer != settings.SignalingServer) StartMailbox(); }
         };
         foreach (var check in new[] { ptt, noise, gate }) check.CheckedChanged += (_, _) => { UpdateAudioOptions(); SaveSettings(); };
+        voiceMode.SelectedIndexChanged += (_, _) =>
+        {
+            settings.AudioMode = voiceMode.SelectedIndex switch { 1 => VoiceMode.Gaming, 2 => VoiceMode.Economy, _ => VoiceMode.Normal };
+            room?.ApplyAudioSettings(); SaveSettings();
+        };
         talkKey.SelectedIndexChanged += (_, _) => { UpdateAudioOptions(); SaveSettings(); };
         volume.ValueChanged += (_, _) => { UpdateAudioOptions(); SaveSettings(); };
         name.Leave += (_, _) => SaveSettings();
@@ -403,3 +408,4 @@ public sealed partial class MainForm : Form
     private sealed record Choice(string Id, string Name) { public override string ToString() => Name; }
     private sealed record PendingCall(FriendCard Friend, string Id, string Code, DateTimeOffset Deadline);
 }
+

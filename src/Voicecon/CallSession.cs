@@ -1,5 +1,6 @@
 using SIPSorcery.Net;
 using SIPSorceryMedia.Abstractions;
+using System.Net.Sockets;
 using System.Text;
 
 namespace Voicecon;
@@ -15,6 +16,10 @@ public sealed class CallSession : IDisposable
     public event Action<byte[]>? VideoFrame;
     public long VideoSentBytes, VideoReceivedBytes;
     private volatile bool disposed;
+    private volatile bool lowPriorityMode;
+    private Socket? prioritySocket;
+    private int originalTrafficClass;
+    private bool originalTrafficClassKnown;
     private int controlOpened;
     private long sentBytes, receivedBytes;
     public event Action<string>? Status;
@@ -43,6 +48,7 @@ public sealed class CallSession : IDisposable
 
     public CallSession(Settings settings, bool localOnly = false)
     {
+        lowPriorityMode = settings.AudioMode is VoiceMode.Gaming or VoiceMode.Economy;
         var route = localOnly ? "auto" : settings.ConnectionRoute;
         var useTurn = route is "auto" or "relay";
         if (!localOnly && route == "relay" && string.IsNullOrWhiteSpace(settings.TurnUrl))
@@ -157,6 +163,44 @@ public sealed class CallSession : IDisposable
         if (!disposed && control?.readyState == RTCDataChannelState.open) control.send(message);
     }
 
+    public void SetVoiceMode(VoiceMode mode)
+    {
+        lowPriorityMode = mode is VoiceMode.Gaming or VoiceMode.Economy;
+        ApplyGamingTrafficPriority();
+    }
+
+    private void ApplyGamingTrafficPriority()
+    {
+        if (disposed) return;
+        try
+        {
+            var socket = peer.GetRtpChannel().RtpSocket;
+            if (socket is null) return;
+            if (!ReferenceEquals(prioritySocket, socket))
+            {
+                prioritySocket = socket;
+                try
+                {
+                    originalTrafficClass = Convert.ToInt32(socket.GetSocketOption(SocketOptionLevel.IP, SocketOptionName.TypeOfService));
+                    originalTrafficClassKnown = true;
+                }
+                catch (Exception ex) when (ex is SocketException or ArgumentException or NotSupportedException or InvalidOperationException)
+                {
+                    originalTrafficClassKnown = false;
+                }
+            }
+
+            // DSCP LE (1) is encoded in the upper six bits: 1 << 2 = 4.
+            // Restore the socket's original TOS when gaming mode is turned off.
+            var trafficClass = lowPriorityMode ? 4 : originalTrafficClassKnown ? originalTrafficClass : 0;
+            socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.TypeOfService, trafficClass);
+        }
+        catch (Exception ex) when (ex is SocketException or ArgumentException or NotSupportedException or InvalidOperationException)
+        {
+            // QoS marking is best-effort and must never prevent a call from connecting.
+        }
+    }
+
     public async Task<string> AnswerAsync(RTCSessionDescriptionInit offer)
     {
         if (offer.type != RTCSdpType.offer) throw new InvalidOperationException("Нужно приглашение друга, а не ответ.");
@@ -195,6 +239,7 @@ public sealed class CallSession : IDisposable
         }
         finally { peer.onicegatheringstatechange -= Changed; }
         lifetime.Token.ThrowIfCancellationRequested();
+        ApplyGamingTrafficPriority();
     }
 
     public void Dispose()

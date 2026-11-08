@@ -4,6 +4,8 @@ using System.Text;
 
 namespace Voicecon;
 
+public enum VoiceMode { Normal, Gaming, Economy }
+
 public sealed class Settings
 {
     public string Name { get; set; } = "Игрок";
@@ -33,6 +35,7 @@ public sealed class Settings
     public int TalkKey { get; set; } = 0x56;
     public bool NoiseGate { get; set; } = true;
     public bool NoiseSuppression { get; set; } = true;
+    public VoiceMode AudioMode { get; set; } = VoiceMode.Normal;
     public int Volume { get; set; } = 100;
     public int MicrophoneGain { get; set; } = 100;
     public string StunUrl { get; set; } = "stun:stun.cloudflare.com:3478";
@@ -60,6 +63,7 @@ public sealed class Settings
             value.ProfileDefaultsVersion = 1;
             value.Volume = Math.Clamp(value.Volume, 0, AudioLevels.MaximumPercent);
             value.MicrophoneGain = Math.Clamp(value.MicrophoneGain, 0, AudioLevels.MaximumPercent);
+            if ((int)value.AudioMode is < 0 or > 2) value.AudioMode = VoiceMode.Normal;
             if (value.ConnectionRoute is not ("auto" or "direct" or "relay")) value.ConnectionRoute = "auto";
             if (value.ProtectedTurnPassword.Length > 0)
             {

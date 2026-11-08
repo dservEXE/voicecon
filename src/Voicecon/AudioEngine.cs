@@ -16,6 +16,7 @@ public sealed class AudioEngine : IDisposable
     private readonly short[] silence = new short[VoiceJitterBuffer.FrameSamples];
     private int fill, gateHangover;
     private volatile bool stopped;
+    private int appliedBitrate = 24000;
     private readonly object encodeLock = new();
     private readonly NoiseSuppressor suppressor = new();
     private readonly InputGainProcessor inputGain = new();
@@ -23,6 +24,7 @@ public sealed class AudioEngine : IDisposable
     public ConferenceMixer Jitter { get; } = new();
     public volatile bool Muted, Deafened, PushToTalk, NoiseGate = true;
     public volatile bool NoiseSuppression = true;
+    public volatile int TargetBitrate = 24000;
     public int TalkKey = 0x56;
     public float InputLevel;
     public bool Transmitting;
@@ -73,6 +75,13 @@ public sealed class AudioEngine : IDisposable
 
     private void EncodeFrame()
     {
+        // Keep encoder changes on the capture thread; changing Opus bitrate does not alter frame duration.
+        var targetBitrate = TargetBitrate;
+        if (appliedBitrate != targetBitrate)
+        {
+            encoder.Bitrate = targetBitrate;
+            appliedBitrate = targetBitrate;
+        }
         if (NoiseSuppression) suppressor.Process(frame);
         inputGain.Process(frame, InputGain);
         double energy = 0;
@@ -99,3 +108,4 @@ public sealed class AudioEngine : IDisposable
         Jitter.Dispose();
     }
 }
+
