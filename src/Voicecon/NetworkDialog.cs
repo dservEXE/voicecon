@@ -56,10 +56,10 @@ public sealed class NetworkDialog : ThemedDialog
         };
         UiPainting.ApplyBackgrounds(this);
     }
-    private static Label Caption(string text, float size, Color color, bool bold = false) => new()
+    private static UiLabel Caption(string text, float size, Color color, bool bold = false) => new()
     {
         Text = text, Font = new Font(bold ? "Segoe UI Semibold" : "Segoe UI", size), ForeColor = color,
-        Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty, BackColor = Color.Transparent
+        Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty
     };
     private static void Add(TableLayoutPanel grid, Control control, int height)
     {
@@ -67,4 +67,3 @@ public sealed class NetworkDialog : ThemedDialog
     }
     protected override void Dispose(bool disposing) { if (disposing) brandIcon.Dispose(); base.Dispose(disposing); }
 }
-

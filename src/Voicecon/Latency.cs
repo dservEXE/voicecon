@@ -39,16 +39,16 @@ public sealed class LatencyHistory
 public sealed class LatencyGraph : Control
 {
     public LatencyHistory History { get; }
-    public LatencyGraph(LatencyHistory history) { History = history; DoubleBuffered = true; Dock = DockStyle.Fill; }
+    public LatencyGraph(LatencyHistory history) { History = history; DoubleBuffered = true; Dock = DockStyle.Fill; SetStyle(ControlStyles.ResizeRedraw | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque, true); }
     protected override void OnPaint(PaintEventArgs e)
     {
-        var t = UiTheme.Current; e.Graphics.Clear(t.Surface); var g = e.Graphics; g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        var t = UiTheme.Current; Backdrop.Paint(e.Graphics, this, ClientRectangle); var g = e.Graphics; g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         var plot = new Rectangle(55, 34, Math.Max(10, Width - 78), Math.Max(10, Height - 95)); var now = DateTimeOffset.UtcNow;
         var max = Math.Max(50, Math.Ceiling(History.Points.Select(p => p.Milliseconds ?? 0).DefaultIfEmpty(0).Max() / 50) * 50);
         using var grid = new Pen(t.Border); using var text = new SolidBrush(t.Muted);
         for (var i = 0; i <= 4; i++) { var y = plot.Bottom - i * plot.Height / 4; g.DrawLine(grid, plot.Left, y, plot.Right, y); g.DrawString($"{max * i / 4:0}", UiTheme.Small, text, 3, y - 7); }
         g.DrawString("мс · RTT", UiTheme.Small, text, 6, 8); g.DrawString("−120 с", UiTheme.Small, text, plot.Left, plot.Bottom + 6); g.DrawString("сейчас", UiTheme.Small, text, plot.Right - 42, plot.Bottom + 6);
-        var colors = new[] { t.Accent, Color.MediumSeaGreen, Color.Salmon, Color.Orchid, Color.CornflowerBlue }; var n = 0;
+        var colors = new[] { t.Accent, t.Online, t.Glow, Color.Salmon, Color.CornflowerBlue }; var n = 0;
         foreach (var series in History.Points.GroupBy(p => p.Peer))
         {
             var color = colors[n++ % colors.Length]; using var pen = new Pen(color, 2); PointF? previous = null; DateTimeOffset prevTime = default;
@@ -75,18 +75,18 @@ public sealed partial class MainForm
         var values = peers.Where(p => p.Ping.HasValue).Select(p => p.Ping!.Value).ToArray();
         var routes = room?.ConnectionRoutes.Select(p => p.Route).Distinct().ToArray() ?? [];
         var route = routes.Length switch { 1 => routes[0], > 1 => "разные пути", _ => "маршрут…" };
-        pingButton.Text = values.Length > 0 ? $"{values.Max():0} мс · {route} ▱" : $"Пинг — · {route} ▱";
+        pingButton.Text = room is not { IsDisposed: false, ConnectedCount: > 0 } ? "Пинг" : values.Length > 0 ? $"{values.Max():0} мс · {route}" : $"— мс · {route}";
         if (latencyGraph is { IsDisposed: false }) latencyGraph.Invalidate();
     }
     private void ShowLatency()
     {
-        using var dialog = new ThemedDialog { Text = "Задержка соединения · последние 2 минуты", ClientSize = new Size(640, 370), MinimumSize = new Size(440, 290), StartPosition = FormStartPosition.CenterParent, BackColor = UiTheme.Current.Surface, Icon = Icon };
-        var content = Grid(1, new Padding(14)); dialog.Controls.Add(content);
+        using var dialog = new ThemedDialog { Text = "Задержка соединения · последние 2 минуты", ClientSize = new Size(660, 390), MinimumSize = new Size(440, 290), StartPosition = FormStartPosition.CenterParent, Icon = Icon, Font = UiTheme.Body };
+        var card = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(14) }; dialog.Padding = new Padding(8); dialog.Controls.Add(card);
+        var content = Grid(1); card.Controls.Add(content);
         var routes = room?.ConnectionRoutes ?? [];
         var routeText = routes.Count == 0 ? "Маршрут появится после подключения." : string.Join("   ·   ", routes.Select(p => $"{p.Name}: {p.Route}"));
         var routeLabel = TextLabel(routeText, 9, TextTone.Muted); routeLabel.AutoEllipsis = true; AddRow(content, routeLabel, 28);
         latencyGraph = new LatencyGraph(latency); AddRow(content, latencyGraph, 0); content.RowStyles[^1].SizeType = SizeType.Percent; content.RowStyles[^1].Height = 100;
-        dialog.ShowDialog(this); latencyGraph = null;
+        UiPainting.ApplyBackgrounds(dialog); dialog.ShowDialog(this); latencyGraph = null;
     }
 }
-

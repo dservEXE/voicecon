@@ -9,22 +9,37 @@ public enum VoiceMode { Normal, Gaming, Economy }
 public sealed class Settings
 {
     public string Name { get; set; } = "Игрок";
-    public int ProfileDefaultsVersion { get; set; } = 1;
+    public const int CurrentDefaultsVersion = 2;
+    public int ProfileDefaultsVersion { get; set; } = CurrentDefaultsVersion;
     public bool CheckUpdates { get; set; } = true;
     public string DismissedUpdate { get; set; } = "";
     public DateTimeOffset LastUpdateCheckUtc { get; set; }
     public string Theme { get; set; } = "graphite";
     public bool Animations { get; set; } = true;
+    /// <summary>full · minimal · off</summary>
+    public string AnimationLevel { get; set; } = "full";
+    public bool ShowOnlineStatus { get; set; } = true;
+    public bool MessageSounds { get; set; } = true;
+    public bool ShowMetrics { get; set; } = true;
+    public string LastConversation { get; set; } = "";
+    /// <summary>Screen sharing: optimized · quality · custom.</summary>
+    public string ShareMode { get; set; } = "optimized";
+    public int CustomFps { get; set; } = 60;
+    public int CustomResolution { get; set; } = 1080;
+    public int CustomBitrateKbps { get; set; } = 6000;
+    /// <summary>Camera: optimized · quality.</summary>
+    public string CameraMode { get; set; } = "optimized";
     public bool StartWithWindows { get; set; } = true;
     public string Ringtone { get; set; } = "boris";
     public string RingtoneFile { get; set; } = "";
     public bool NotificationSounds { get; set; } = true;
     public string SignalingServer { get; set; } = "https://ntfy.sh";
-    public int MicrophoneHotkey { get; set; } = (int)(Keys.Control | Keys.Shift | Keys.M);
-    public int HeadphonesHotkey { get; set; } = (int)(Keys.Control | Keys.Shift | Keys.D);
-    public int OpenWindowHotkey { get; set; } = (int)(Keys.Control | Keys.Shift | Keys.O);
-    public int ScreenHotkey { get; set; } = (int)(Keys.Control | Keys.Shift | Keys.S);
-    public int CameraHotkey { get; set; } = (int)(Keys.Control | Keys.Shift | Keys.C);
+    // No default shortcuts: every field starts empty and is assigned by the user.
+    public int MicrophoneHotkey { get; set; }
+    public int HeadphonesHotkey { get; set; }
+    public int OpenWindowHotkey { get; set; }
+    public int ScreenHotkey { get; set; }
+    public int CameraHotkey { get; set; }
     public int VideoFps { get; set; } = 30;
     public int VideoResolution { get; set; } = 720;
     public bool ShareSound { get; set; }
@@ -35,7 +50,7 @@ public sealed class Settings
     public int TalkKey { get; set; } = 0x56;
     public bool NoiseGate { get; set; } = true;
     public bool NoiseSuppression { get; set; } = true;
-    public VoiceMode AudioMode { get; set; } = VoiceMode.Normal;
+    public VoiceMode AudioMode { get; set; } = VoiceMode.Gaming;
     public string LastFriendId { get; set; } = "";
     public int Volume { get; set; } = 100;
     public int MicrophoneGain { get; set; } = 100;
@@ -96,8 +111,26 @@ public sealed class Settings
         {
             using var schema = JsonDocument.Parse(json);
             var value = JsonSerializer.Deserialize<Settings>(json) ?? new();
-            if (!schema.RootElement.TryGetProperty(nameof(ProfileDefaultsVersion), out _) || value.ProfileDefaultsVersion < 1 || string.IsNullOrWhiteSpace(value.Name)) value.Name = "Игрок";
-            value.ProfileDefaultsVersion = 1;
+            var root = schema.RootElement;
+            var version = root.TryGetProperty(nameof(ProfileDefaultsVersion), out _) ? value.ProfileDefaultsVersion : 0;
+            if (version < 1 || string.IsNullOrWhiteSpace(value.Name)) value.Name = "Игрок";
+            if (version < 2)
+            {
+                // 0.7: shortcuts no longer have defaults. Clear the old factory chords the user never changed.
+                if (value.MicrophoneHotkey == (int)(Keys.Control | Keys.Shift | Keys.M)) value.MicrophoneHotkey = 0;
+                if (value.HeadphonesHotkey == (int)(Keys.Control | Keys.Shift | Keys.D)) value.HeadphonesHotkey = 0;
+                if (value.OpenWindowHotkey == (int)(Keys.Control | Keys.Shift | Keys.O)) value.OpenWindowHotkey = 0;
+                if (value.ScreenHotkey == (int)(Keys.Control | Keys.Shift | Keys.S)) value.ScreenHotkey = 0;
+                if (value.CameraHotkey == (int)(Keys.Control | Keys.Shift | Keys.C)) value.CameraHotkey = 0;
+                if (!root.TryGetProperty(nameof(AnimationLevel), out _)) value.AnimationLevel = value.Animations ? "full" : "off";
+            }
+            value.ProfileDefaultsVersion = CurrentDefaultsVersion;
+            if (value.AnimationLevel is not ("full" or "minimal" or "off")) value.AnimationLevel = "full";
+            if (value.ShareMode is not ("optimized" or "quality" or "custom")) value.ShareMode = "optimized";
+            if (value.CameraMode is not ("optimized" or "quality")) value.CameraMode = "optimized";
+            if (value.CustomFps is not (15 or 30 or 60 or 120)) value.CustomFps = 60;
+            if (value.CustomResolution is not (720 or 1080 or 1440 or 0)) value.CustomResolution = 1080;
+            value.CustomBitrateKbps = Math.Clamp(value.CustomBitrateKbps, 500, 20000);
             if (value.Ringtone == "bell") value.Ringtone = "boris";
             value.Volume = Math.Clamp(value.Volume, 0, AudioLevels.MaximumPercent);
             value.MicrophoneGain = Math.Clamp(value.MicrophoneGain, 0, AudioLevels.MaximumPercent);

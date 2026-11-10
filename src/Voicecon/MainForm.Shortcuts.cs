@@ -55,10 +55,9 @@ public sealed partial class MainForm
         if (!previewMode && !TryRegister(proposed)) { UnregisterShortcuts(); box.Chord = old[index]; SetHint("Эта комбинация уже занята другой программой."); return; }
         UnregisterShortcuts();
         settings.MicrophoneHotkey = (int)proposed[0]; settings.HeadphonesHotkey = (int)proposed[1]; settings.OpenWindowHotkey = (int)proposed[2]; settings.ScreenHotkey = (int)proposed[3]; settings.CameraHotkey = (int)proposed[4]; registeredKeys = proposed;
-        UpdateShortcutHint(); SaveSettings(); if (!box.Capturing) RegisterShortcuts();
+        SaveSettings(); RefreshControls(); if (!box.Capturing) RegisterShortcuts();
     }
     private void ExecuteShortcut(int action)
     { switch (action) { case 1: ToggleMute(); break; case 2: ToggleDeafen(); break; case 3: ShowWindow(); break; case 4: _ = ToggleScreenAsync(); break; case 5: _ = ToggleCameraAsync(); break; } }
-    private void UpdateShortcutHint() => shortcutHint.Text = $"{HotkeyBox.Format((Keys)settings.MicrophoneHotkey)} · микрофон    {HotkeyBox.Format((Keys)settings.HeadphonesHotkey)} · наушники    {HotkeyBox.Format((Keys)settings.OpenWindowHotkey)} · открыть окно";
     protected override void WndProc(ref Message m) { if (m.Msg == 0x0312) ExecuteShortcut(m.WParam.ToInt32()); base.WndProc(ref m); }
 }

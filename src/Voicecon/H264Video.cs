@@ -57,8 +57,10 @@ public sealed class VideoEncoder : IDisposable
         var ratio = height <= 0 ? 1 : Math.Min(1, height / (double)source.Height);
         return new Size(Math.Max(2, (int)(source.Width * ratio) / 2 * 2), Math.Max(2, (int)(source.Height * ratio) / 2 * 2));
     }
-    public async Task StartAsync(Size source, Size output, int fps, int? desktopOutput = null)
+    public static int DefaultBitrateKbps(Size output) => output.Height <= 720 ? 3000 : output.Height <= 1080 ? 6000 : 10000;
+    public async Task StartAsync(Size source, Size output, int fps, int? desktopOutput = null, int? bitrateKbps = null)
     {
+        var bitrate = Math.Clamp(bitrateKbps is > 0 ? bitrateKbps.Value : DefaultBitrateKbps(output), 300, 50000) * 1000;
         Exception? last = null;
         foreach (var encoder in new[] { "h264_nvenc", "h264_amf", "h264_qsv", "libopenh264" })
         {
@@ -70,7 +72,7 @@ public sealed class VideoEncoder : IDisposable
                 else if (desktopOutput.HasValue)
                     args.AddRange(["-f", "lavfi", "-i", $"ddagrab=output_idx={desktopOutput}:framerate={fps}:dup_frames=0,hwdownload,format=bgra", "-vf", $"scale={output.Width}:{output.Height}:flags=fast_bilinear,format=yuv420p"]);
                 else args.AddRange(["-f", "rawvideo", "-pixel_format", "bgra", "-video_size", $"{source.Width}x{source.Height}", "-framerate", fps.ToString(), "-i", "pipe:0", "-vf", $"scale={output.Width}:{output.Height}:flags=fast_bilinear,format=yuv420p"]);
-                args.AddRange(["-an", "-c:v", encoder, "-g", fps.ToString(), "-bf", "0", "-b:v", (output.Height <= 720 ? 3_000_000 : output.Height <= 1080 ? 6_000_000 : 10_000_000).ToString(), "-threads", "2"]);
+                args.AddRange(["-an", "-c:v", encoder, "-g", fps.ToString(), "-bf", "0", "-b:v", bitrate.ToString(), "-maxrate", bitrate.ToString(), "-bufsize", (bitrate / 2).ToString(), "-threads", "2"]);
                 if (encoder == "h264_nvenc") args.AddRange(["-preset", "p1", "-tune", "ull", "-rc", "cbr", "-zerolatency", "1", "-forced-idr", "1"]);
                 if (encoder == "h264_amf") args.AddRange(["-usage", "ultralowlatency"]);
                 if (encoder == "libopenh264") args.AddRange(["-rc_mode", "bitrate", "-allow_skip_frames", "1"]);

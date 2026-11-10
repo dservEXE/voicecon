@@ -32,10 +32,10 @@ internal static class Program
                 if (args.Contains("--mailbox-check")) { await FeatureChecks.CheckMailbox(); return; }
                 if (args.Contains("--call-flow-check")) { await FeatureChecks.CheckCallFlow(); return; }
                 FeatureChecks.CheckIdentityAndVideo();
-                if (args.Contains("--resilience")) { ResilienceChecks.Check(); return; }
+                if (args.Contains("--resilience")) { ResilienceChecks.Check(); ConversationChecks.Check(); return; }
                 if (args.Contains("--network")) { await CheckPublicStun(); return; }
                 if (args.Contains("--benchmark")) { await CheckBenchmark(); return; }
-                ResilienceChecks.Check(); CheckCodes(); CheckNoise(); CheckJitter();
+                ResilienceChecks.Check(); ConversationChecks.Check(); CheckCodes(); CheckNoise(); CheckJitter();
                 await CheckTransport(); await CheckConference();
                 Console.WriteLine("ALL CHECKS PASSED");
             }
@@ -192,17 +192,37 @@ internal static class Program
         host.SetParticipantVolume(adjusted.Id, 900, -5); Assert(host.Participants.First(p => p.Id == adjusted.Id) is { VoicePercent: 300, SharePercent: 0 }, "Participant bounds");
         Console.WriteLine("PASS independent participant voice/share volume, 0–300% bounds, no changes to other callers");
         var videoSeen = new HashSet<string>();
-        foreach (var pair in new[] { (a, "a"), (b, "b"), (c, "c"), (d, "d"), (e, "e") }) pair.Item1.VideoReceived += (_, _, bytes) => { if (bytes.Length > 6) { lock (videoSeen) videoSeen.Add(pair.Item2); } };
+        var guests = new[] { (a, "a"), (b, "b"), (c, "c"), (d, "d"), (e, "e") };
+        foreach (var pair in guests) pair.Item1.VideoReceived += (_, _, bytes) => { if (bytes.Length > 6) { lock (videoSeen) videoSeen.Add(pair.Item2); } };
+        // Opt-in viewing: a stream is announced to everyone, but frames go only to people who press "watch".
+        var announced = 0; foreach (var pair in guests) pair.Item1.StreamStarted += (peer, _, kind) => { if (peer == host.SelfId && kind == 1) Interlocked.Increment(ref announced); };
+        var viewers = new List<(string, bool)>(); host.ViewerChanged += (peer, kind, started) => { if (kind == 1) lock (viewers) viewers.Add((peer, started)); };
+        host.AnnounceStream(1, 640, 360, 30);
+        await Until(() => announced == 5 && guests.All(g => g.Item1.RemoteStreams.Any(s => s.PeerId == host.SelfId && s.Kind == 1 && !s.Watching)), "Stream announcement reaches all 5 peers");
         using (var bitmap = new Bitmap(160, 90))
         {
             using (var graphics = Graphics.FromImage(bitmap)) graphics.Clear(Color.CornflowerBlue);
             var packet = VideoCodec.Encode(bitmap, 1, 42, 640, 360);
+            Assert(!host.WantsVideo(1), "Nobody watching: the sender does not need to encode");
+            for (var repeat = 0; repeat < 5; repeat++) { host.SendVideo(packet); await Task.Delay(60); }
+            Assert(videoSeen.Count == 0, "Frames are not sent to peers who did not choose to watch");
+            a.Watch(host.SelfId, 1, true); c.Watch(host.SelfId, 1, true);
+            await Until(() => host.ViewerCount(1) == 2 && host.WantsVideo(1), "Viewers registered on the sender");
+            for (var repeat = 0; repeat < 20 && videoSeen.Count < 2; repeat++) { host.SendVideo(packet); await Task.Delay(100); }
+            await Until(() => videoSeen.SetEquals(["a", "c"]), "Only watchers receive the stream");
+            Assert(viewers.Count == 2 && viewers.All(v => v.Item2), "Sender is told who started watching");
+            c.Watch(host.SelfId, 1, false); await Until(() => host.ViewerCount(1) == 1, "Viewer can stop watching");
+            Assert(viewers.Count(v => !v.Item2) == 1, "Sender is told who stopped watching");
+            foreach (var pair in guests.Skip(1)) pair.Item1.Watch(host.SelfId, 1, true);
+            await Until(() => host.ViewerCount(1) == 5, "Everyone watching");
+            videoSeen.Clear();
             for (var repeat = 0; repeat < 20 && videoSeen.Count < 5; repeat++) { host.SendVideo(packet); await Task.Delay(100); }
-            await Until(() => videoSeen.Count == 5, "Encrypted video reaches all 5 peers");
+            await Until(() => videoSeen.Count == 5, "Encrypted video reaches all 5 watching peers");
         }
         var stopped = 0; a.VideoStopped += (_, kind, sequence) => { if (kind == 1 && sequence == 43) stopped++; }; host.StopVideo(1, 43);
-        await Until(() => stopped == 1, "Reliable video stop signal");
-        Console.WriteLine("PASS binary video channel: synthetic frame delivered to 5 peers; reliable stop signal; no desktop/camera captured");
+        await Until(() => stopped == 1 && !a.RemoteStreams.Any(), "Reliable video stop signal clears the announced stream");
+        Assert(host.ViewerCount(1) == 0 && !host.WantsVideo(1), "Stopping a stream clears its viewers");
+        Console.WriteLine("PASS opt-in streams: announcement to 5 peers, no frames without viewers, only watchers receive, join/leave viewer events, reliable stop; no desktop/camera captured");
         b.Dispose();
         await Until(() => host.ConnectedCount == 4 && a.ConnectedCount == 4, "Conference guest departure", 35);
         Assert(host.CanInvite, "Host can reinvite after departure");

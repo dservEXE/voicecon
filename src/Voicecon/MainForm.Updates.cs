@@ -5,7 +5,7 @@ public sealed partial class MainForm
     private readonly GitHubUpdater updater = new();
     private readonly CancellationTokenSource updateLifetime = new();
     private CancellationTokenSource? updateDownload;
-    private readonly Label updateStatus = new(), updateHeadline = new();
+    private readonly UiLabel updateStatus = new(), updateHeadline = new();
     private readonly SoftButton checkUpdate = new(), installUpdate = new(), bannerUpdate = new(), laterUpdate = new();
     private readonly ToggleRow autoUpdates = new();
     private RowStyle? updateBannerRow;
@@ -14,8 +14,8 @@ public sealed partial class MainForm
     private bool checkingUpdate, downloadingUpdate, updateStarted;
     private Control BuildUpdateBanner()
     {
-        var card = new UpdateBannerPanel(); var row = Columns(-1, 245, 10, 85);
-        PrepareLabel(updateHeadline, TextTone.Accent); updateHeadline.Font = new Font("Segoe UI Semibold", 14); updateHeadline.Text = "Есть обновление Voicecon";
+        var card = new UpdateBannerPanel(); var row = Columns(-1, 230, 8, 96);
+        PrepareLabel(updateHeadline, TextTone.Normal); updateHeadline.Font = UiTheme.Heading; updateHeadline.Text = "Есть обновление Voicecon";
         PrepareButton(bannerUpdate, "Обновить", UiIcon.Arrow, ButtonTone.Primary); PrepareButton(laterUpdate, "Позже", UiIcon.None, ButtonTone.Quiet);
         row.Controls.Add(updateHeadline, 0, 0); row.Controls.Add(bannerUpdate, 1, 0); row.Controls.Add(laterUpdate, 3, 0); card.Controls.Add(row);
         bannerUpdate.Click += async (_, _) => await InstallUpdateAsync(); laterUpdate.Click += (_, _) => { if (availableUpdate is { } release) settings.DismissedUpdate = release.Tag; SaveSettings(); UpdateUpdateControls(); };
@@ -23,17 +23,15 @@ public sealed partial class MainForm
     }
     private void AddUpdateSettings(TableLayoutPanel grid)
     {
-        AddRow(grid, Space(), 15); AddRow(grid, TextLabel("Обновления", 12, TextTone.Normal, true), 30);
-        AddRow(grid, TextLabel("Установлена версия " + GitHubUpdater.CurrentVersion.ToString(3), 9, TextTone.Muted), 26);
-        PrepareLabel(updateStatus, TextTone.Muted); updateStatus.Font = UiTheme.Small; updateStatus.Text = "Источник: GitHub · " + GitHubUpdater.Repository; AddRow(grid, updateStatus, 44);
-        var actions = Columns(-45, 8, -55); PrepareButton(checkUpdate, "Проверить", UiIcon.Refresh); PrepareButton(installUpdate, "Обновить", UiIcon.Arrow, ButtonTone.Primary);
-        actions.Controls.Add(checkUpdate, 0, 0); actions.Controls.Add(installUpdate, 2, 0); AddRow(grid, actions, 40);
-        SetupToggle(autoUpdates, "Проверять обновления", "GitHub Releases · установка только по вашей кнопке", settings.CheckUpdates); AddRow(grid, autoUpdates, 58); autoUpdates.Dock = DockStyle.Top; autoUpdates.Height = 58;
+        SetupToggle(autoUpdates, "Проверять обновления", "Установка только по вашей кнопке", settings.CheckUpdates); AddRow(grid, autoUpdates, 52);
+        PrepareLabel(updateStatus, TextTone.Muted); updateStatus.Font = UiTheme.Small; updateStatus.Text = "Версия " + GitHubUpdater.CurrentVersion.ToString(3) + " · источник: GitHub"; AddRow(grid, updateStatus, 36);
+        var updateActions = Columns(-45, 8, -55); PrepareButton(checkUpdate, "Проверить", UiIcon.Refresh, ButtonTone.Quiet); PrepareButton(installUpdate, "Обновить", UiIcon.Arrow, ButtonTone.Primary);
+        updateActions.Controls.Add(checkUpdate, 0, 0); updateActions.Controls.Add(installUpdate, 2, 0); AddRow(grid, updateActions, 44);
         checkUpdate.Click += async (_, _) => await CheckUpdatesAsync(true); installUpdate.Click += async (_, _) => await InstallUpdateAsync();
         autoUpdates.CheckedChanged += (_, _) => { settings.CheckUpdates = autoUpdates.Checked; SaveSettings(); if (!previewMode && settings.CheckUpdates) _ = CheckUpdatesAsync(false); };
         UpdateUpdateControls();
     }
-    private bool CallBusyForUpdate => busy || room is { IsDisposed: false, HasStarted: true } || incomingCall is not null || outgoingCall is not null || capture.ScreenActive || capture.CameraActive;
+    private bool CallBusyForUpdate => busy || room is { IsDisposed: false, HasStarted: true } || incomingCall is not null || outgoingCalls.Count > 0 || capture.ScreenActive || capture.CameraActive;
     private void UpdateUpdateControls()
     {
         checkUpdate.Enabled = !checkingUpdate && !downloadingUpdate; checkUpdate.Text = checkingUpdate ? "Проверяем…" : "Проверить";
@@ -41,7 +39,7 @@ public sealed partial class MainForm
         installUpdate.Enabled = bannerUpdate.Enabled = enabled;
         installUpdate.Text = bannerUpdate.Text = downloadingUpdate ? "Загружаем…" : availableUpdate is { } release ? "Обновить до " + release.Version.ToString(3) : "Обновить";
         if (availableUpdate is { } next) updateHeadline.Text = "Новая версия " + next.Version.ToString(3) + (CallBusyForUpdate ? " · после звонка" : " · можно позже");
-        if (updateBannerRow is not null) updateBannerRow.Height = availableUpdate is { } found && settings.DismissedUpdate != found.Tag ? 76 : 0;
+        if (updateBannerRow is not null) updateBannerRow.Height = availableUpdate is { } found && settings.DismissedUpdate != found.Tag ? 68 : 0;
     }
     private void ScheduleUpdateCheck()
     {

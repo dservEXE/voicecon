@@ -7,7 +7,7 @@ using Voicecon;
 internal static class UpdateChecks
 {
     private static void Require(bool value, string description) { if (!value) throw new Exception(description); }
-    private static string Metadata(byte[] data, string tag = "v0.7.0", bool draft = false, bool prerelease = false, string? digest = null, string? url = null) => JsonSerializer.Serialize(new
+    private static string Metadata(byte[] data, string tag = "v99.0.0", bool draft = false, bool prerelease = false, string? digest = null, string? url = null) => JsonSerializer.Serialize(new
     { tag_name = tag, draft, prerelease, assets = new[] { new { name = GitHubUpdater.InstallerName, state = "uploaded", size = data.LongLength, digest = digest ?? "sha256:" + Convert.ToHexString(SHA256.HashData(data)), browser_download_url = url ?? $"https://github.com/{GitHubUpdater.Repository}/releases/download/{tag}/{GitHubUpdater.InstallerName}" } } });
     private static T Get<T>(object obj, string name) => (T)obj.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(obj)!;
     private static void Set(object obj, string name, object value) => obj.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(obj, value);
@@ -15,7 +15,7 @@ internal static class UpdateChecks
     public static async Task Check()
     {
         var bytes = Encoding.UTF8.GetBytes(new string('V', 4096)); var current = new Version(0, 6, 0); var good = Metadata(bytes);
-        var release = GitHubUpdater.ParseRelease(good, current)!; Require(release.Version == new Version(0, 7, 0, 0), "New release version normalised");
+        var release = GitHubUpdater.ParseRelease(good, current)!; Require(release.Version == new Version(99, 0, 0, 0), "New release version normalised");
         Require(GitHubUpdater.ParseRelease(Metadata(bytes, "v0.6.0"), current) is null && GitHubUpdater.ParseRelease(Metadata(bytes, "v0.5.9"), current) is null, "Equal version and downgrade ignored");
         Require(GitHubUpdater.ParseRelease(Metadata(bytes, draft: true), current) is null && GitHubUpdater.ParseRelease(Metadata(bytes, prerelease: true), current) is null, "Drafts and prereleases ignored");
         foreach (var bad in new[] { "{}", "not json", Metadata(bytes, "v0.7.0-preview"), Metadata(bytes, digest: "sha256:00"), Metadata(bytes, url: "https://github.com/elsewhere/app/setup.exe"), Metadata(bytes, url: "https://github.com.evil.invalid/dservEXE/voicecon/releases/download/v0.7.0/Voicecon-Setup.exe") })

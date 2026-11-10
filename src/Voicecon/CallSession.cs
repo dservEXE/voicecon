@@ -145,6 +145,8 @@ public sealed class CallSession : IDisposable
         }
     }
     public bool WantsVideo(byte kind) => !disposed && video?.readyState == RTCDataChannelState.open;
+    /// <summary>A new viewer: skip delta frames until the next keyframe so the first bytes sent are decodable.</summary>
+    public void RequireKey(byte kind) { lock (videoLock) needsKey.Add(kind); }
     private void AttachControl(RTCDataChannel channel)
     {
         if (channel.label != "voicecon-control") return;
@@ -250,4 +252,3 @@ public sealed class CallSession : IDisposable
         lifetime.Dispose();
     }
 }
-

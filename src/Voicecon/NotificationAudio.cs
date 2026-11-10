@@ -2,7 +2,11 @@ using System.Runtime.InteropServices;
 using NAudio.Wave;
 namespace Voicecon;
 
-public enum NotificationCue { MicrophoneOn, MicrophoneOff, HeadphonesOn, HeadphonesOff, CallConnected }
+public enum NotificationCue
+{
+    MicrophoneOn, MicrophoneOff, HeadphonesOn, HeadphonesOff, CallConnected,
+    ScreenShareOn, ScreenShareOff, CameraOn, CameraOff, ParticipantLeft, ViewerJoined, ViewerLeft, Message, StreamStarted
+}
 
 /// <summary>Immutable stereo PCM clip in the notification output's native format.</summary>
 public sealed class NotificationClip

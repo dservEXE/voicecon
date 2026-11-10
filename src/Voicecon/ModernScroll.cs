@@ -23,12 +23,14 @@ public sealed class ModernScrollBar : Control
     }
     protected override void OnPaint(PaintEventArgs e)
     {
-        UiPainting.Fill(e.Graphics, ClientRectangle, Parent?.BackColor ?? UiTheme.Current.Surface);
+        Backdrop.Paint(e.Graphics, this, ClientRectangle);
         if (maximum == 0) return; e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        using var track = new SolidBrush(UiTheme.Blend(BackColor, UiTheme.Current.Border, 0.35f));
-        using var path = UiTheme.Rounded(new RectangleF(3, 4, Math.Max(3, Width - 6), Math.Max(1, Height - 8)), 4); e.Graphics.FillPath(track, path);
-        using var brush = new SolidBrush(dragging || hovered ? UiTheme.Current.Accent : UiTheme.Blend(UiTheme.Current.Border, UiTheme.Current.Muted, 0.42f));
-        using var thumb = UiTheme.Rounded(Thumb, 4); e.Graphics.FillPath(brush, thumb);
+        var t = UiTheme.Current; var narrow = dragging || hovered ? 0 : 2;
+        using var track = new SolidBrush(Color.FromArgb(22, 0, 0, 0));
+        using var path = UiTheme.Rounded(new RectangleF(4, 4, Math.Max(3, Width - 8), Math.Max(1, Height - 8)), 3); e.Graphics.FillPath(track, path);
+        var thumbRect = Thumb; thumbRect.Inflate(-narrow, 0);
+        using var brush = new SolidBrush(dragging || hovered ? UiTheme.WithAlpha(t.Accent, 220) : Color.FromArgb(70, 255, 255, 255));
+        using var thumb = UiTheme.Rounded(thumbRect, Math.Max(2, thumbRect.Width / 2f)); e.Graphics.FillPath(brush, thumb);
     }
     protected override void OnMouseDown(MouseEventArgs e)
     {
@@ -46,9 +48,9 @@ public sealed class ModernScrollBar : Control
     protected override void OnMouseWheel(MouseEventArgs e) { Value -= Math.Sign(e.Delta) * Math.Max(1, page / 8); }
 }
 
-public class ThemedScrollHost : Panel, IMessageFilter
+public class ThemedScrollHost : BackdropPanel, IMessageFilter
 {
-    private readonly Panel viewport = new() { Margin = Padding.Empty };
+    private readonly BackdropPanel viewport = new() { Margin = Padding.Empty };
     private readonly ModernScrollBar bar = new();
     private Control? content;
     private TableLayoutPanel? rows;
@@ -67,6 +69,7 @@ public class ThemedScrollHost : Panel, IMessageFilter
     }
     private void Wheel(object? sender, MouseEventArgs e)
     { bar.Value -= Math.Sign(e.Delta) * 54 * DeviceDpi / 96; if (e is HandledMouseEventArgs handled) handled.Handled = true; }
+    public void ScrollToEnd() { UpdateRange(); bar.Value = int.MaxValue; }
     public void ScrollTo(Control child)
     {
         if (content is null) return; var offset = 0; Control? current = child;
@@ -126,7 +129,7 @@ public sealed class ThemedFlowList : ThemedScrollHost
     [DefaultValue(true)] public bool WrapContents { get => flow.WrapContents; set => flow.WrapContents = value; }
 }
 
-public sealed class ThemedTextScroll : Panel
+public sealed class ThemedTextScroll : BackdropPanel
 {
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr handle, int msg, IntPtr w, IntPtr l);
     private readonly RichTextBox editor;

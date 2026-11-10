@@ -47,7 +47,7 @@ internal static class UiPaintChecks
         var on = UiSounds.CreatePcm(true); var off = UiSounds.CreatePcm(false);
         if (on.Length != 4960 || off.Length != on.Length || on.SequenceEqual(off)) throw new Exception("Microphone cues must have equal duration and distinct waveforms");
         if (on[0] != 0 || on[1] != 0 || on[^1] != 0 || on[^2] != 0) throw new Exception("Cue edges must fade to zero");
-        Console.WriteLine($"PASS {count} repaint/resize cases across 5 themes: reused buffers cleared, partial paint clipped; main/network backgrounds opaque; two distinct 155 ms local cues generated without playback.");
+        Console.WriteLine($"PASS {count} repaint/resize cases across {UiTheme.All.Length} themes: reused buffers cleared, partial paint clipped; main/network backgrounds opaque; two distinct 155 ms local cues generated without playback.");
 
         string Paint(Control control, Color seed, Rectangle? clip)
         {

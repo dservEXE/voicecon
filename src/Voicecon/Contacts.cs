@@ -138,6 +138,8 @@ public sealed class ContactBook : IDisposable
                 var signal = JsonSerializer.Deserialize<CallSignal>(plain);
                 var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 if (signal is null || !Guid.TryParse(signal.Id, out _) || signal.Time < now - 90 || signal.Time > now + 90 || signal.Kind is not ("offer" or "answer" or "reject" or "cancel" or "busy")) return null;
+                if (signal.Group is not null && !Guid.TryParseExact(signal.Group, "N", out _)) signal = signal with { Group = null, Title = null };
+                if (signal.Title is { } title) signal = signal with { Title = new string(title.Where(c => !char.IsControl(c)).Take(40).ToArray()) };
                 return (friend, signal);
             }
             finally { CryptographicOperations.ZeroMemory(shared); }
@@ -160,7 +162,11 @@ public sealed class ContactBook : IDisposable
     private sealed record Envelope(string F, string N, string T, string C);
 }
 
-public sealed record CallSignal(string Kind, string Id, long Time, string? Code = null)
+/// <param name="Group">Optional group conversation id for a group call; older clients ignore it.</param>
+/// <param name="Title">Optional group title shown to the callee.</param>
+public sealed record CallSignal(string Kind, string Id, long Time, string? Code = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Group = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Title = null)
 {
-    public static CallSignal Create(string kind, string id, string? code = null) => new(kind, id, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), code);
+    public static CallSignal Create(string kind, string id, string? code = null, string? group = null, string? title = null) => new(kind, id, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), code, group, title);
 }

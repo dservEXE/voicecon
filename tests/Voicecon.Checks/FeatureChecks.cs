@@ -48,19 +48,18 @@ internal static class FeatureChecks
         using var mailA = new CallMailbox(a, alice); using var mailB = new CallMailbox(b, bob);
         Set(formA, "contacts", a); Set(formB, "contacts", b); Set(formA, "mailbox", mailA); Set(formB, "mailbox", mailB);
         Get<Settings>(formA, "settings").Name = "Synthetic A"; Get<Settings>(formB, "settings").Name = "Synthetic B";
-        Invoke(formA, "RefreshFriends", new object?[] { null }); Invoke(formB, "RefreshFriends", new object?[] { null });
         var context = SynchronizationContext.Current!; var errors = new ConcurrentQueue<Exception>();
         mailA.Received += (friend, signal) => Post(formA, friend, signal); mailB.Received += (friend, signal) => Post(formB, friend, signal);
         mailA.Start(); mailB.Start(); await Wait(() => mailA.Connected && mailB.Connected, "mailboxes connected");
-        await Call(formA, "CallFriendAsync"); await Wait(() => Has(formB, "incomingCall"), "incoming call delivered");
+        await Call(formA, "CallFriendAsync", bob); await Wait(() => Has(formB, "incomingCall"), "incoming call delivered");
         await Call(formB, "AcceptIncomingAsync");
         await Wait(() => Get<VoiceRoom>(formA, "room").CanChat && Get<VoiceRoom>(formB, "room").CanChat, "accepted call connects");
         Get<TextBox>(formA, "chatInput").Text = "Full-flow chat 😎"; Invoke(formA, "SendMessage");
         await Wait(() => Get<List<VoiceRoom.ChatLine>>(formB, "chatHistory").Any(l => l.Text == "Full-flow chat 😎"), "main UI chat delivery");
-        Invoke(formA, "EndCall"); await Wait(() => Get<VoiceRoom>(formB, "room").IsDisposed, "remote hangup");
-        await Call(formA, "CallFriendAsync"); await Wait(() => Has(formB, "incomingCall"), "second incoming call"); Invoke(formB, "RejectIncoming");
-        await Wait(() => !Has(formA, "outgoingCall") && !Has(formB, "incomingCall"), "rejected call cleans state");
-        await Call(formA, "CallFriendAsync"); await Wait(() => Has(formB, "incomingCall"), "third incoming call"); Invoke(formA, "EndCall");
+        Invoke(formA, "EndCall"); await Wait(() => Field(formB, "room") is not VoiceRoom { IsDisposed: false }, "remote hangup");
+        await Call(formA, "CallFriendAsync", bob); await Wait(() => Has(formB, "incomingCall"), "second incoming call"); Invoke(formB, "RejectIncoming");
+        await Wait(() => Get<System.Collections.IDictionary>(formA, "outgoingCalls").Count == 0 && !Has(formB, "incomingCall"), "rejected call cleans state");
+        await Call(formA, "CallFriendAsync", bob); await Wait(() => Has(formB, "incomingCall"), "third incoming call"); Invoke(formA, "EndCall");
         await Wait(() => !Has(formB, "incomingCall"), "caller cancellation clears ringing");
         Require(!formA.Visible && !formB.Visible && UiMotion.IsIdle, "Integration test must remain hidden and idle");
         Console.WriteLine("PASS full application call flow through public encrypted delivery: mutual contacts → dial → incoming → accept → WebRTC → emoji chat → hangup; reject and caller cancellation; no visible windows, notification playback, microphone, desktop or camera capture");
@@ -73,7 +72,8 @@ internal static class FeatureChecks
             while (!predicate()) { if (errors.TryDequeue(out var error)) throw error; if (DateTime.UtcNow > deadline) throw new TimeoutException(label); await Task.Delay(50); }
         }
         static object? Invoke(object target, string name, params object?[] args) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
-        static Task Call(object target, string name) => (Task)Invoke(target, name)!;
+        static Task Call(object target, string name, params object?[] args) => (Task)Invoke(target, name, args)!;
+        static object? Field(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target);
         static T Get<T>(object target, string name) => (T)target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target)!;
         static bool Has(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target) is not null;
         static void Set(object target, string name, object value) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);

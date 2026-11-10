@@ -28,13 +28,13 @@ internal static class NotificationChecks
             Require(played.Any(s => s != 0) && played[^1920..].All(s => s == 0), "Natural EOF must end in exact digital silence");
             Require(Read(mixer, 4800).All(s => s == 0), "Idle buffer must clear stale bytes");
         }
-        Require(signatures.Count == 4, "Four distinct toggle cues");
+        Require(signatures.Count == Enum.GetValues<NotificationCue>().Length - 1, "Every action cue is distinct");
         var cut = new NotificationMixer(); cut.SetCue(UiSounds.Clip(NotificationCue.MicrophoneOn)); var before = Read(cut, 2200); cut.SetCue(null); var tail = Read(cut, 1200);
         Require(Math.Abs(tail[0] - before[^2]) < 1000 && tail[960..].All(s => s == 0), "Stop must fade a phase-continuous tail within 10 ms");
         var replace = new NotificationMixer(); replace.SetCue(UiSounds.Clip(NotificationCue.HeadphonesOn)); Read(replace, 3900);
         replace.SetCue(UiSounds.Clip(NotificationCue.MicrophoneOff)); var transition = Read(replace, 1200);
         Require(transition.Select(Math.Abs).Max() < 9000, "Crossfade must remain bounded");
-        Console.WriteLine("PASS 4 distinct cues, smooth zero endpoints, silent tails, EOF clears reused buffers, phase-continuous stop, bounded replacement fade");
+        Console.WriteLine($"PASS {signatures.Count} distinct watery cues, smooth zero endpoints, silent tails, EOF clears reused buffers, phase-continuous stop, bounded replacement fade");
 
         var outputs = new List<FakeOutput>();
         using (var sounds = new UiSounds(_ => { var p = new FakeOutput(); outputs.Add(p); return p; }))

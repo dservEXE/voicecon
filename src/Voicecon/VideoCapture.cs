@@ -64,7 +64,10 @@ public sealed class VideoCapture : IDisposable
     private int sequence, cameraBusy, screenGeneration, cameraGeneration;
     private long lastCamera;
     private volatile bool screenActive, cameraActive;
-    private int fps = 30, resolution = 720;
+    private int fps = 30, resolution = 720, bitrate;
+    public int Fps => fps;
+    public Size ScreenSize { get; private set; }
+    public Size CameraSize { get; private set; }
     public bool ScreenActive => screenActive;
     public bool CameraActive => cameraActive;
     public string Details => string.Join(" · ", new[] { screenEncoder is { } s ? $"экран {s.ActualFps:0} fps / {s.Backend}" : null, cameraEncoder is { } c ? $"камера {c.ActualFps:0} fps / {c.Backend}" : null }.Where(s => s is not null));
@@ -73,7 +76,8 @@ public sealed class VideoCapture : IDisposable
     public event Action<string>? Error;
     public Func<byte, bool>? FrameNeeded { get; set; }
     public void SetQuality(string quality) { }
-    public void Configure(int frames, int height) { fps = frames is 30 or 60 or 120 ? frames : 30; resolution = height is 720 or 1080 ? height : 0; }
+    public void Configure(int frames, int height, int bitrateKbps = 0)
+    { fps = frames is 15 or 30 or 60 or 120 ? frames : 30; resolution = height is 720 or 1080 or 1440 ? height : 0; bitrate = Math.Max(0, bitrateKbps); }
     public async Task StartScreenAsync(ShareSource source)
     {
         StopScreen(); var generation = ++screenGeneration; var encoder = screenEncoder = new VideoEncoder(); screenActive = true;
@@ -84,13 +88,14 @@ public sealed class VideoCapture : IDisposable
             if (desktop is null)
             {
                 var capture = window = new WindowCapture(); capture.Start(source.Window, fps, source.Window == IntPtr.Zero ? source.MonitorBounds : null); native = capture.NativeSize;
-                capture.Frame += bytes => { if (generation == screenGeneration) encoder.Submit(bytes); };
+                // Nobody watching: skip encoding entirely (no CPU/GPU cost until a viewer joins).
+                capture.Frame += bytes => { if (generation == screenGeneration && (FrameNeeded?.Invoke(1) ?? true)) encoder.Submit(bytes); };
                 capture.Closed += message => { if (generation != screenGeneration) return; StopScreen(); Error?.Invoke(message); };
             }
-            var size = VideoEncoder.OutputSize(native, resolution);
+            var size = VideoEncoder.OutputSize(native, resolution); ScreenSize = size;
             encoder.Encoded += (data, key) => { if (screenActive && generation == screenGeneration) Frame?.Invoke(H264Packet.Wrap(data, 1, NextSequence(), size, key)); };
             encoder.Failed += message => { if (generation != screenGeneration) return; StopScreen(); Error?.Invoke("Демонстрация остановлена: " + message); };
-            await encoder.StartAsync(native, size, fps, desktop);
+            await encoder.StartAsync(native, size, fps, desktop, bitrate);
             if (generation != screenGeneration) encoder.Dispose();
         }
         catch { StopScreen(); throw; }
@@ -115,11 +120,11 @@ public sealed class VideoCapture : IDisposable
             var source = capture.FrameSources.Values.First(s => s.Info.SourceKind == MediaFrameSourceKind.Color && s.Info.MediaStreamType is MediaStreamType.VideoPreview or MediaStreamType.VideoRecord);
             var format = source.SupportedFormats.Where(f => f.FrameRate.Denominator > 0 && f.FrameRate.Numerator / (double)f.FrameRate.Denominator <= fps + 0.5 && (resolution == 0 || f.VideoFormat.Height <= resolution)).OrderByDescending(f => (long)f.VideoFormat.Width * f.VideoFormat.Height).ThenByDescending(f => f.FrameRate.Numerator / (double)f.FrameRate.Denominator).FirstOrDefault();
             if (format is not null) await source.SetFormatAsync(format);
-            var native = source.CurrentFormat.VideoFormat; var size = VideoEncoder.OutputSize(new Size((int)native.Width, (int)native.Height), resolution);
+            var native = source.CurrentFormat.VideoFormat; var size = VideoEncoder.OutputSize(new Size((int)native.Width, (int)native.Height), resolution); CameraSize = size;
             var encoder = cameraEncoder = new VideoEncoder();
             encoder.Encoded += (data, key) => { if (cameraActive && generation == cameraGeneration) Frame?.Invoke(H264Packet.Wrap(data, 2, NextSequence(), size, key)); };
             encoder.Failed += message => { if (generation != cameraGeneration) return; Error?.Invoke("Камера остановлена: " + message); _ = StopCameraAsync(); };
-            await encoder.StartAsync(size, size, fps);
+            await encoder.StartAsync(size, size, fps, null, bitrate);
             if (generation != cameraGeneration) { encoder.Dispose(); return; }
             reader = await capture.CreateFrameReaderAsync(source, Windows.Media.MediaProperties.MediaEncodingSubtypes.Argb32, new BitmapSize { Width = (uint)size.Width, Height = (uint)size.Height });
             reader.AcquisitionMode = MediaFrameReaderAcquisitionMode.Realtime; reader.FrameArrived += CameraFrame; cameraActive = true;
@@ -129,7 +134,7 @@ public sealed class VideoCapture : IDisposable
     }
     private void CameraFrame(MediaFrameReader sender, MediaFrameArrivedEventArgs args)
     {
-        if (!cameraActive || Environment.TickCount64 - lastCamera < 1000.0 / fps || Interlocked.Exchange(ref cameraBusy, 1) != 0) return;
+        if (!cameraActive || Environment.TickCount64 - lastCamera < 1000.0 / fps || FrameNeeded?.Invoke(2) == false || Interlocked.Exchange(ref cameraBusy, 1) != 0) return;
         lastCamera = Environment.TickCount64;
         try
         {

@@ -9,12 +9,7 @@ internal static class UiRenders
         // DrawToBitmap paints our own invisible controls. No Show, focus, input,
         // tray icon, hotkeys, microphone, network or settings writes are involved.
         var directory = Path.GetFullPath("artifacts/previews"); Directory.CreateDirectory(directory);
-        var sdkLicense = Path.GetFullPath(".tools/licenses/WindowsSDK-license.dat");
-        if (File.Exists(sdkLicense))
-        {
-            using var licenseText = new RichTextBox(); licenseText.LoadFile(sdkLicense, RichTextBoxStreamType.RichText);
-            File.WriteAllText(Path.GetFullPath(".tools/licenses/WindowsSDK.txt"), licenseText.Text);
-        }
+        foreach (var old in Directory.GetFiles(directory, "*.png")) File.Delete(old);
         UiTheme.Select("graphite");
         using (var icon = BrandIcon.Create())
         {
@@ -24,44 +19,55 @@ internal static class UiRenders
         foreach (var theme in UiTheme.All)
         {
             using var form = new MainForm(true, theme.Id);
-            Prepare(form);
-            using var image = new Bitmap(form.Width, form.Height);
-            form.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
-            image.Save(Path.Combine(directory, theme.Id + ".png"), ImageFormat.Png);
-            var inset = (form.Width - form.ClientSize.Width) / 2;
-            var client = new Rectangle(inset, form.Height - form.ClientSize.Height - inset, form.ClientSize.Width, form.ClientSize.Height);
-            using var clientImage = image.Clone(client, PixelFormat.Format32bppArgb);
-            clientImage.Save(Path.Combine(directory, theme.Id + "-client.png"), ImageFormat.Png);
-            Console.WriteLine($"RENDER {theme.Id}: {image.Width}x{image.Height}");
+            Save(form, Path.Combine(directory, theme.Id + ".png"));
         }
-        using var compact = new MainForm(true, "graphite"); compact.Size = compact.MinimumSize;
-        Prepare(compact); using var small = new Bitmap(compact.Width, compact.Height);
-        compact.DrawToBitmap(small, new Rectangle(Point.Empty, small.Size)); small.Save(Path.Combine(directory, "compact.png"), ImageFormat.Png);
-        UiTheme.Select("graphite"); using var network = new NetworkDialog(new Settings()); Prepare(network);
-        using var networkImage = new Bitmap(network.Width, network.Height);
-        network.DrawToBitmap(networkImage, new Rectangle(Point.Empty, networkImage.Size)); networkImage.Save(Path.Combine(directory, "network.png"), ImageFormat.Png);
-        using var settings = new MainForm(true, "graphite");
-        typeof(MainForm).GetMethod("ShowPage", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(settings, [true]); Prepare(settings);
-        using var settingsImage = new Bitmap(settings.Width, settings.Height); settings.DrawToBitmap(settingsImage, new Rectangle(Point.Empty, settingsImage.Size)); settingsImage.Save(Path.Combine(directory, "settings.png"), ImageFormat.Png);
-                var scroll = Descendants(settings).OfType<ModernScrollBar>().First(); scroll.Value = 10000;
-        using (var bottom = new Bitmap(settings.Width, settings.Height)) { settings.DrawToBitmap(bottom, new Rectangle(Point.Empty, bottom.Size)); bottom.Save(Path.Combine(directory, "settings-bottom.png"), ImageFormat.Png); }
-        using var share = new ShareDialog(new Settings { VideoResolution = 0, VideoFps = 120 }); Prepare(share);
-        using (var image = new Bitmap(share.Width, share.Height)) { share.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(Path.Combine(directory, "share.png"), ImageFormat.Png); }
-        using var video = new MainForm(true, "graphite"); var page = (Control)typeof(MainForm).GetField("videoPage", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(video)!;
-        typeof(MainForm).GetMethod("ShowContent", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(video, [page]); Prepare(video);
-        using (var image = new Bitmap(video.Width, video.Height)) { video.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(Path.Combine(directory, "video.png"), ImageFormat.Png); }
-        var sample = new Bitmap(960, 540); using (var graphics = Graphics.FromImage(sample)) { graphics.Clear(Color.FromArgb(23, 31, 46)); graphics.FillRectangle(Brushes.SlateBlue, 80, 70, 500, 280); graphics.DrawString("Voicecon · просмотр демонстрации", UiTheme.Title, Brushes.White, 100, 380); }
-        typeof(MainForm).GetMethod("DisplayVideo", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(video, ["preview:1", "Друг", (byte)1, sample]);
-        foreach (var mode in new[] { VideoViewMode.Normal, VideoViewMode.Wide, VideoViewMode.Fullscreen })
+        UiTheme.Select("graphite");
+        using (var call = new MainForm(true, "graphite")) { Prepare(call); Invoke(call, "ShowPreviewCall"); Save(call, Path.Combine(directory, "in-call.png")); }
+        using (var compact = new MainForm(true, "graphite")) { compact.Size = compact.MinimumSize; Save(compact, Path.Combine(directory, "compact.png")); }
+        using (var settings = new MainForm(true, "graphite"))
         {
-            typeof(MainForm).GetMethod("SetVideoMode", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(video, ["preview:1", mode]);
-            var target = mode == VideoViewMode.Fullscreen ? (Form)typeof(MainForm).GetField("viewer", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(video)! : video;
-            if (mode == VideoViewMode.Fullscreen) target.Size = new Size(1280, 720);
-            Prepare(target); using var image = new Bitmap(target.Width, target.Height); target.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(Path.Combine(directory, "view-" + mode.ToString().ToLowerInvariant() + ".png"), ImageFormat.Png);
+            // Overlapping siblings print in reverse z-order with DrawToBitmap, so the drawer is captured on its own.
+            Prepare(settings); Invoke(settings, "OpenSettings");
+            var drawer = (Control)settings.GetType().GetField("settingsDrawer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(settings)!;
+            Save(drawer, Path.Combine(directory, "settings.png"));
+            var host = (ThemedScrollHost)settings.GetType().GetField("settingsScroller", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(settings)!;
+            Descendants(host).OfType<ModernScrollBar>().First().Value = 1100; Save(drawer, Path.Combine(directory, "settings-middle.png"));
+            Invoke(settings, "ToggleDeveloper");
+            Descendants(host).OfType<ModernScrollBar>().First().Value = 100000; Save(drawer, Path.Combine(directory, "settings-bottom.png"));
         }
-        typeof(MainForm).GetMethod("CloseExpandedVideo", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(video, []);
+        using (var share = new ShareDialog(new Settings { ShareMode = "custom" })) Save(share, Path.Combine(directory, "share.png"));
+        using (var camera = new CameraDialog(["Встроенная камера", "USB-камера"], "optimized")) Save(camera, Path.Combine(directory, "camera.png"));
+        using (var add = new AddFriendDialog("VCF1.eyJJZCI6IjAxMjM0NTY3ODkiLCJOYW1lIjoi0JjQs9GA0L7QuiJ9")) Save(add, Path.Combine(directory, "add-friend.png"));
+        using (var network = new NetworkDialog(new Settings())) Save(network, Path.Combine(directory, "network.png"));
+        using (var window = new StreamWindow("peer:1", "Алекс · экран"))
+        {
+            window.Size = new Size(960, 600);
+            var sample = new Bitmap(1280, 720); using (var graphics = Graphics.FromImage(sample)) { graphics.Clear(Color.FromArgb(23, 31, 46)); graphics.FillRectangle(Brushes.SlateBlue, 120, 100, 700, 380); graphics.DrawString("Voicecon · трансляция", UiTheme.Title, Brushes.White, 140, 520); }
+            window.ShowFrame(sample); Save(window, Path.Combine(directory, "stream.png"));
+        }
+        var glyphs = new Bitmap(900, 80); using (var g = Graphics.FromImage(glyphs))
+        {
+            g.Clear(UiTheme.Current.Background); var x = 8;
+            foreach (var icon in Enum.GetValues<UiIcon>().Skip(1)) { UiIcons.Draw(g, icon, new RectangleF(x, 8, 24, 24), UiTheme.Current.Text); x += 27; }
+        }
+        glyphs.Save(Path.Combine(directory, "icons.png"), ImageFormat.Png);
         Console.WriteLine("Offscreen renders saved: " + directory);
     }
+    private static void Save(Control control, string path)
+    {
+        Prepare(control);
+        using var image = new Bitmap(control.Width, control.Height);
+        control.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
+        if (control is Form form)
+        {
+            var inset = (form.Width - form.ClientSize.Width) / 2;
+            var client = new Rectangle(inset, form.Height - form.ClientSize.Height - inset, form.ClientSize.Width, form.ClientSize.Height);
+            using var clientImage = image.Clone(client, PixelFormat.Format32bppArgb); clientImage.Save(path, ImageFormat.Png);
+        }
+        else image.Save(path, ImageFormat.Png);
+        Console.WriteLine("RENDER " + Path.GetFileName(path));
+    }
+    private static void Invoke(object target, string name) => target.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(target, []);
     private static IEnumerable<Control> Descendants(Control parent) { foreach (Control child in parent.Controls) { yield return child; foreach (var nested in Descendants(child)) yield return nested; } }
     private static void Prepare(Control control)
     {

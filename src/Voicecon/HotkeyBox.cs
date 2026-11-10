@@ -10,9 +10,9 @@ public sealed class HotkeyBox : Control
     [Browsable(false)] public bool Capturing => capturing;
     public HotkeyBox()
     {
-        SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.ResizeRedraw, true);
+        SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.ResizeRedraw | ControlStyles.Opaque, true); BackColor = UiTheme.Current.GlassSolid;
         Cursor = Cursors.Hand; TabStop = true; pulse.Tick += (_, _) => Invalidate();
-        var menu = new ContextMenuStrip { Renderer = new ThemeMenuRenderer() };
+        var menu = ThemeMenuRenderer.CreateMenu();
         menu.Items.Add("Убрать назначение", null, (_, _) => { CancelCapture(); Chord = Keys.None; Captured?.Invoke(this, EventArgs.Empty); }); ContextMenuStrip = menu;
     }
     public static string Format(Keys key)
@@ -46,12 +46,15 @@ public sealed class HotkeyBox : Control
     protected override void OnLostFocus(EventArgs e) { CancelCapture(); base.OnLostFocus(e); }
     protected override void OnPaint(PaintEventArgs e)
     {
-        var t = UiTheme.Current; UiPainting.Fill(e.Graphics, ClientRectangle, Parent?.BackColor ?? t.Surface);
+        var t = UiTheme.Current; Backdrop.Paint(e.Graphics, this, ClientRectangle); var s = DeviceDpi / 96f;
         var p = capturing ? (float)(0.5 + 0.5 * Math.Sin((Environment.TickCount64 - started) / 180.0)) : 0;
-        using var path = UiTheme.Rounded(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 10);
-        using var fill = new SolidBrush(capturing ? UiTheme.Blend(t.Field, t.Accent, 0.08f + p * 0.1f) : t.Field); e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias; e.Graphics.FillPath(fill, path);
-        using var pen = new Pen(capturing ? UiTheme.Blend(t.Border, t.Accent, 0.5f + p * 0.5f) : Focused ? t.Accent : t.Border); e.Graphics.DrawPath(pen, path);
-        TextRenderer.DrawText(e.Graphics, capturing ? "Нажмите клавишу · Esc отмена" : Format(chord), UiTheme.Small, new Rectangle(10, 0, Width - 16, Height), capturing ? t.Accent : t.Text, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        var shape = new RectangleF(1.5f, 1.5f, Width - 3, Height - 3);
+        var radius = Math.Min(14 * s, shape.Height / 2);
+        Glass.Pill(e.Graphics, shape, radius, s, capturing ? Color.FromArgb((int)(40 + 40 * p), t.Accent) : Color.FromArgb(18, 255, 255, 255), 0, 0, 0.8f);
+        if (capturing || Focused) { using var path = UiTheme.Rounded(shape, radius); using var pen = new Pen(UiTheme.WithAlpha(t.Accent, capturing ? (int)(110 + 120 * p) : 150), 1.2f * s); e.Graphics.DrawPath(pen, path); }
+        var text = capturing ? "Нажмите клавишу · Esc — отмена" : chord == Keys.None ? "Не назначено" : Format(chord);
+        var color = capturing ? t.Accent : chord == Keys.None ? UiTheme.WithAlpha(t.Muted, 170) : t.Text;
+        TextRenderer.DrawText(e.Graphics, text, chord == Keys.None && !capturing ? UiTheme.Small : UiTheme.Strong, new Rectangle((int)(12 * s), 0, Width - (int)(18 * s), Height), color, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.PreserveGraphicsClipping);
     }
     protected override void Dispose(bool disposing) { if (disposing) { pulse.Dispose(); ContextMenuStrip?.Dispose(); } base.Dispose(disposing); }
 }

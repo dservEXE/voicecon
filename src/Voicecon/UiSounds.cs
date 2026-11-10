@@ -7,7 +7,7 @@ public sealed class UiSounds : IDisposable
 {
     private static readonly NotificationClip[] cues = Enum.GetValues<NotificationCue>().Select(CreateClip).ToArray();
     private static readonly Lazy<NotificationClip> bell = new(() => NotificationClip.FromPcm16Mono(CreateRingtone(false)));
-    private static readonly Lazy<NotificationClip> softRing = new(() => NotificationClip.FromPcm16Mono(CreateRingtone(true)));
+    private static readonly Lazy<NotificationClip> softRing = new(CreateWaterRing);
     private static readonly Lazy<NotificationClip> borisRing = new(() => CreateEmbeddedRingtone("Voicecon.Ringtone.Boris"));
     private static readonly Lazy<NotificationClip> birdMachineRing = new(() => CreateEmbeddedRingtone("Voicecon.Ringtone.BirdMachine"));
     private static readonly Lazy<NotificationClip> dial = new(CreateDial);
@@ -28,7 +28,7 @@ public sealed class UiSounds : IDisposable
         => createPlayer = outputFactory ?? (index => new WaveOutEvent { DeviceNumber = index, DesiredLatency = 60, NumberOfBuffers = 3 });
     public void Play(bool microphoneEnabled, int outputDevice) => PlayCue(microphoneEnabled ? NotificationCue.MicrophoneOn : NotificationCue.MicrophoneOff, outputDevice);
     public void PlayHeadphones(bool headphonesEnabled, int outputDevice) => PlayCue(headphonesEnabled ? NotificationCue.HeadphonesOn : NotificationCue.HeadphonesOff, outputDevice);
-    private void PlayCue(NotificationCue cue, int outputDevice) => Start(cues[(int)cue], outputDevice, false);
+    public void PlayCue(NotificationCue cue, int outputDevice) => Start(cues[(int)cue], outputDevice, false);
     public void PlayRing(string kind, string customFile, int outputDevice)
     {
         var clip = kind switch { "boris" => borisRing.Value, "birdmachine" => birdMachineRing.Value, "soft" => softRing.Value, _ => bell.Value };
@@ -119,50 +119,99 @@ public sealed class UiSounds : IDisposable
         }
         catch { return bell.Value; }
     }
-    private static NotificationClip CreateCallEnded()
+    // ---- Sound design: soft, muffled "water drop" cues (ASMR-like), no clicks. ----
+    // Each cue is built from droplets: a sine whose pitch glides quickly (the bubble resonance), with a gentle attack and
+    // exponential decay, then low-pass filtered (muffled) and given a short watery echo. Peaks are normalised per cue.
+    private sealed class Synth(int frames)
     {
-        const int frames = 18720;
-        var data = new float[frames * 2];
-        void Note(double startMs, double durationMs, double frequency)
+        public readonly float[] Data = new float[frames * 2];
+        public int Frames { get; } = frames;
+        /// <summary>Global pitch: everything sits about a fifth lower than the design notes, for a deeper, rounder sound.</summary>
+        private const double Depth = 0.68;
+        public Synth Drop(double startMs, double from, double to, double durationMs, double level, double pan = 0)
         {
-            var start = (int)(startMs * 48); var length = (int)(durationMs * 48);
-            for (var i = 0; i < length && start + i < frames; i++)
+            from *= Depth; to *= Depth;
+            var start = (int)(startMs * 48); var length = (int)(durationMs * 48); double phase = 0;
+            for (var i = 0; i < length && start + i < Frames; i++)
             {
-                var attack = NotificationClip.Smooth(Math.Min(1, i / 288d));
-                var release = NotificationClip.Smooth(Math.Min(1, (length - 1 - i) / 576d));
-                var sample = (float)(Math.Sin(i * 2 * Math.PI * frequency / 48000) * 0.115 * attack * release);
-                data[(start + i) * 2] += sample; data[(start + i) * 2 + 1] += sample;
+                var t = i / (double)length;
+                var frequency = from * Math.Pow(to / from, 1 - Math.Pow(1 - t, 3));
+                phase += 2 * Math.PI * frequency / 48000;
+                var envelope = NotificationClip.Smooth(Math.Min(1, i / 300d)) * Math.Exp(-t * 4.0);
+                // Fundamental, a soft second harmonic and a sub-octave "body" that gives the drop its depth.
+                var sample = (Math.Sin(phase) + 0.12 * Math.Sin(2 * phase + 0.4) + 0.42 * Math.Sin(phase * 0.5)) * level * envelope;
+                Data[(start + i) * 2] += (float)(sample * (1 - Math.Max(0, pan))); Data[(start + i) * 2 + 1] += (float)(sample * (1 + Math.Min(0, pan)));
             }
+            return this;
         }
-        Note(0, 100, 698.46); Note(125, 180, 523.25);
-        return new NotificationClip(data);
+        public Synth Hum(double startMs, double frequency, double durationMs, double level)
+        {
+            frequency *= Depth;
+            var start = (int)(startMs * 48); var length = (int)(durationMs * 48);
+            for (var i = 0; i < length && start + i < Frames; i++)
+            {
+                var t = i / (double)length; var envelope = Math.Sin(Math.PI * t); envelope *= envelope;
+                var wobble = 1 + 0.004 * Math.Sin(2 * Math.PI * 5.5 * i / 48000);
+                var sample = Math.Sin(2 * Math.PI * frequency * wobble * i / 48000) * level * envelope;
+                Data[(start + i) * 2] += (float)sample; Data[(start + i) * 2 + 1] += (float)sample;
+            }
+            return this;
+        }
+        /// <summary>Two-pass one-pole low-pass (zero phase): rounds every edge, the "under water" colour.</summary>
+        public Synth Muffle(double cutoff)
+        {
+            var a = 1 - Math.Exp(-2 * Math.PI * cutoff * 0.82 / 48000);
+            for (var channel = 0; channel < 2; channel++)
+            {
+                double y = 0; for (var i = 0; i < Frames; i++) { y += a * (Data[i * 2 + channel] - y); Data[i * 2 + channel] = (float)y; }
+                y = 0; for (var i = Frames - 1; i >= 0; i--) { y += a * (Data[i * 2 + channel] - y); Data[i * 2 + channel] = (float)y; }
+            }
+            return this;
+        }
+        /// <summary>Short feedback echoes, slightly different per ear: a small wet room.</summary>
+        public Synth Wet(double amount = 0.22)
+        {
+            foreach (var (delayMs, channel) in new[] { (19.0, 0), (23.0, 1), (31.0, 0), (37.0, 1) })
+            {
+                var delay = (int)(delayMs * 48);
+                for (var i = delay; i < Frames; i++) Data[i * 2 + channel] += (float)(Data[(i - delay) * 2 + channel] * amount * 1.12);
+            }
+            return this;
+        }
+        public NotificationClip Build(double peak, double silentTailMs = 40)
+        {
+            var tail = (int)(silentTailMs * 48); var fade = 960; var end = Math.Max(0, Frames - tail);
+            for (var i = 0; i < Frames; i++)
+            {
+                double gain = i >= end ? 0 : i >= end - fade ? NotificationClip.Smooth((end - i) / (double)fade) : 1;
+                Data[i * 2] = (float)(Data[i * 2] * gain); Data[i * 2 + 1] = (float)(Data[i * 2 + 1] * gain);
+            }
+            var max = Data.Max(v => Math.Abs(v));
+            if (max > 0) for (var i = 0; i < Data.Length; i++) Data[i] = (float)(Data[i] / max * peak);
+            return new NotificationClip(Data);
+        }
     }
-    private static NotificationClip CreateClip(NotificationCue cue)
+    private static NotificationClip CreateCallEnded() =>
+        new Synth(18720).Drop(0, 620, 420, 140, 0.10, -0.15).Drop(125, 470, 290, 200, 0.09, 0.15).Hum(0, 196, 300, 0.02).Muffle(1900).Wet().Build(0.11);
+    private static NotificationClip CreateClip(NotificationCue cue) => cue switch
     {
-        var frames = cue == NotificationCue.CallConnected ? 18720 : cue is NotificationCue.MicrophoneOn or NotificationCue.MicrophoneOff ? 7440 : 11520;
-        var data = new float[frames * 2];
-        void Note(double startMs, double durationMs, params double[] frequencies)
-        {
-            var start = (int)(startMs * 48); var length = (int)(durationMs * 48);
-            for (var i = 0; i < length && start + i < frames; i++)
-            {
-                var attack = NotificationClip.Smooth(Math.Min(1, i / 288d));
-                var release = NotificationClip.Smooth(Math.Min(1, (length - 1 - i) / 576d));
-                double value = 0; foreach (var f in frequencies) value += Math.Sin(i * 2 * Math.PI * f / 48000);
-                var sample = (float)(value / frequencies.Length * 0.115 * attack * release);
-                data[(start + i) * 2] += sample; data[(start + i) * 2 + 1] += sample;
-            }
-        }
-        switch (cue)
-        {
-            case NotificationCue.MicrophoneOn: Note(0, 55, 880); Note(68, 70, 1174.66); break;
-            case NotificationCue.MicrophoneOff: Note(0, 60, 659.25); Note(73, 60, 440); break;
-            case NotificationCue.HeadphonesOn: Note(0, 80, 261.63, 392); Note(100, 105, 392, 523.25); break;
-            case NotificationCue.HeadphonesOff: Note(0, 80, 196, 293.66); Note(110, 90, 146.83, 220); break;
-            case NotificationCue.CallConnected: Note(0, 75, 392); Note(90, 80, 587.33); Note(185, 150, 783.99, 987.77); break;
-        }
-        return new NotificationClip(data);
-    }
+        // Microphone cues keep the historical 155 ms length; on rises, off falls.
+        NotificationCue.MicrophoneOn => new Synth(7440).Drop(0, 520, 900, 92, 0.12).Muffle(2400).Wet(0.18).Build(0.11),
+        NotificationCue.MicrophoneOff => new Synth(7440).Drop(0, 780, 430, 92, 0.12).Muffle(2200).Wet(0.18).Build(0.11),
+        NotificationCue.HeadphonesOn => new Synth(11520).Drop(0, 330, 560, 115, 0.11, -0.2).Drop(80, 440, 760, 125, 0.09, 0.2).Muffle(1700).Wet().Build(0.11),
+        NotificationCue.HeadphonesOff => new Synth(11520).Drop(0, 560, 340, 115, 0.11, 0.2).Drop(80, 420, 240, 135, 0.09, -0.2).Muffle(1600).Wet().Build(0.11),
+        NotificationCue.CallConnected => new Synth(18720).Hum(0, 220, 360, 0.025).Drop(0, 350, 520, 125, 0.10, -0.25).Drop(90, 440, 660, 130, 0.09).Drop(185, 520, 880, 170, 0.09, 0.25).Muffle(2100).Wet().Build(0.12),
+        NotificationCue.ScreenShareOn => new Synth(14400).Drop(0, 600, 900, 85, 0.09, -0.3).Drop(60, 700, 1050, 90, 0.08).Drop(120, 820, 1300, 135, 0.08, 0.3).Muffle(2600).Wet(0.24).Build(0.11),
+        NotificationCue.ScreenShareOff => new Synth(14400).Drop(0, 1100, 800, 85, 0.09, 0.3).Drop(60, 900, 640, 90, 0.08).Drop(120, 700, 440, 150, 0.08, -0.3).Muffle(2300).Wet(0.24).Build(0.11),
+        NotificationCue.CameraOn => new Synth(11520).Drop(0, 480, 760, 90, 0.10).Drop(70, 640, 1020, 120, 0.08, 0.2).Muffle(2300).Wet().Build(0.10),
+        NotificationCue.CameraOff => new Synth(11520).Drop(0, 760, 480, 90, 0.10).Drop(70, 560, 360, 125, 0.08, -0.2).Muffle(2100).Wet().Build(0.10),
+        NotificationCue.ParticipantLeft => new Synth(14400).Drop(0, 520, 360, 140, 0.10).Drop(110, 400, 260, 170, 0.09).Muffle(1700).Wet().Build(0.10),
+        NotificationCue.ViewerJoined => new Synth(9600).Drop(0, 900, 1400, 70, 0.07, -0.2).Drop(55, 1200, 1700, 90, 0.05, 0.2).Muffle(3000).Wet(0.26).Build(0.075),
+        NotificationCue.ViewerLeft => new Synth(9600).Drop(0, 1300, 850, 80, 0.07, 0.2).Drop(55, 1000, 680, 100, 0.05, -0.2).Muffle(2600).Wet(0.26).Build(0.07),
+        NotificationCue.Message => new Synth(7200).Drop(0, 1050, 1450, 60, 0.06).Muffle(1900).Wet(0.2).Build(0.06),
+        NotificationCue.StreamStarted => new Synth(12480).Drop(0, 640, 980, 100, 0.08, -0.2).Drop(90, 880, 1320, 140, 0.07, 0.2).Muffle(2500).Wet(0.24).Build(0.09),
+        _ => new Synth(4800).Build(0.01)
+    };
     // Compatibility helper used by device-free PCM checks.
     public static byte[] CreatePcm(bool microphoneEnabled)
     {
@@ -171,17 +220,28 @@ public sealed class UiSounds : IDisposable
         for (var i = 0; i < pcm.Length / 2; i++) { var sample = (short)Math.Round(source[i * 6] * 32767); pcm[i * 2] = (byte)sample; pcm[i * 2 + 1] = (byte)(sample >> 8); }
         return pcm;
     }
+    /// <summary>Ringback: a soft, rounded under-water tone for one second, then two seconds of silence.</summary>
     private static NotificationClip CreateDial()
     {
-        var samples = new float[48000 * 2 * 3];
+        var synth = new Synth(48000 * 3);
+        synth.Hum(0, 425, 950, 0.07).Hum(0, 212.5, 950, 0.025);
         for (var i = 0; i < 48000; i++)
         {
-            var fade = NotificationClip.Smooth(Math.Min(1, Math.Min(i, 47999 - i) / 720d));
-            var value = (float)(Math.Sin(i * 2 * Math.PI * 425 / 48000) * 0.085 * fade);
-            samples[i * 2] = samples[i * 2 + 1] = value;
+            var tremolo = 0.82 + 0.18 * Math.Sin(2 * Math.PI * 4 * i / 48000);
+            synth.Data[i * 2] *= (float)tremolo; synth.Data[i * 2 + 1] *= (float)tremolo;
         }
-        return new NotificationClip(samples);
-    }    public static byte[] CreateRingtone(bool soft)
+        return synth.Muffle(1400).Build(0.075, 2000);
+    }
+    /// <summary>"Мягкий звонок": a slow bubbling arpeggio that repeats.</summary>
+    private static NotificationClip CreateWaterRing()
+    {
+        var synth = new Synth(48000 * 2);
+        double[] notes = [392, 494, 587, 784, 587, 494];
+        for (var i = 0; i < notes.Length; i++) synth.Drop(i * 170, notes[i] * 0.85, notes[i] * 1.12, 260, 0.09, i % 2 == 0 ? -0.3 : 0.3);
+        synth.Hum(0, 196, 1300, 0.02);
+        return synth.Muffle(2100).Wet(0.25).Build(0.12, 300);
+    }
+    public static byte[] CreateRingtone(bool soft)
     {
         var pcm = new byte[16000 * 2 * 2];
         for (var i = 0; i < 16000 * 2; i++)

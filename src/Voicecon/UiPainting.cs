@@ -1,6 +1,6 @@
 namespace Voicecon;
 
-/// <summary>Paint flat backgrounds locally, without replaying the ancestor tree.</summary>
+/// <summary>Background helpers. Controls paint the shared backdrop slice; BackColor stays opaque for native children.</summary>
 public static class UiPainting
 {
     public static void Fill(Graphics graphics, Rectangle bounds, Color color)
@@ -8,6 +8,7 @@ public static class UiPainting
         using var brush = new SolidBrush(color);
         graphics.FillRectangle(brush, bounds);
     }
+    public static void Background(Graphics graphics, Control control, Rectangle bounds) => Backdrop.Paint(graphics, control, bounds);
     public static void ApplyBackgrounds(Control parent)
     {
         var t = UiTheme.Current;
@@ -15,12 +16,9 @@ public static class UiPainting
         {
             child.BackColor = child switch
             {
-                UpdateBannerPanel => UiTheme.Blend(t.Surface, t.Accent, t.Id == "porcelain" ? 0.2f : 0.34f),
-                SurfacePanel surface => surface.Recessed ? t.Field : t.Surface,
                 TextBoxBase => t.Field,
                 PictureBox => Color.Black,
-                Panel line when line.Tag as string == "divider" => t.Border,
-                _ => parent.BackColor
+                _ => Backdrop.Approximate(child)
             };
             ApplyBackgrounds(child);
         }
@@ -32,9 +30,9 @@ public sealed class BufferedGrid : TableLayoutPanel
     public BufferedGrid()
     {
         DoubleBuffered = true;
-        SetStyle(ControlStyles.ResizeRedraw | ControlStyles.AllPaintingInWmPaint, true);
+        SetStyle(ControlStyles.ResizeRedraw | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
     }
-    protected override void OnPaintBackground(PaintEventArgs e) => UiPainting.Fill(e.Graphics, ClientRectangle, BackColor);
+    protected override void OnPaintBackground(PaintEventArgs e) => Backdrop.Paint(e.Graphics, this, ClientRectangle);
 }
 
 public sealed class BufferedPeople : FlowLayoutPanel
@@ -42,7 +40,7 @@ public sealed class BufferedPeople : FlowLayoutPanel
     public BufferedPeople()
     {
         DoubleBuffered = true;
-        SetStyle(ControlStyles.ResizeRedraw | ControlStyles.AllPaintingInWmPaint, true);
+        SetStyle(ControlStyles.ResizeRedraw | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
     }
-    protected override void OnPaintBackground(PaintEventArgs e) => UiPainting.Fill(e.Graphics, ClientRectangle, BackColor);
+    protected override void OnPaintBackground(PaintEventArgs e) => Backdrop.Paint(e.Graphics, this, ClientRectangle);
 }
