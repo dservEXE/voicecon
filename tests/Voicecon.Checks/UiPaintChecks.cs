@@ -112,20 +112,34 @@ internal static class UiPaintChecks
         if (!UiMotion.WillAnimate(form)) { Console.WriteLine($"MOTION skipped: visible {form.Visible}, level {UiMotion.Level}"); return; }
         var host = (Control)typeof(MainForm).GetField("mainHost", flags)!.GetValue(form)!;
         using (var shot = SlideOverlay.FromScreen(host)) shot.Save(Path.GetFullPath("artifacts/previews/slide-snapshot.png"));
-        typeof(MainForm).GetMethod("WarmSettings", flags)!.Invoke(form, []);
+        Bitmap? middle = null; var middleEdge = 0;
         var intervals = new List<double>(); var starts = new List<double>();
         foreach (var name in new[] { "OpenSettings", "CloseSettings", "OpenSettings", "CloseSettings" })
         {
             var clock = Stopwatch.StartNew(); typeof(MainForm).GetMethod(name, flags)!.Invoke(form, []); starts.Add(clock.Elapsed.TotalMilliseconds);
-            var last = (float)progress.GetValue(form)!; var lastTime = clock.Elapsed.TotalMilliseconds; var first = true;
+            var last = (float)progress.GetValue(form)!; var lastTime = clock.Elapsed.TotalMilliseconds; var first = true; var frame = 0;
             while (!UiMotion.IsIdle && clock.ElapsedMilliseconds < 2000)
             {
                 Application.DoEvents();
                 var now = (float)progress.GetValue(form)!;
+                if (now != last && starts.Count == 1 && ++frame == 24) { middle?.Dispose(); middle = SlideOverlay.FromScreen(host); middleEdge = (int)Math.Round(host.Width * (1 - now)); }
                 if (now != last) { var t = clock.Elapsed.TotalMilliseconds; if (!first) intervals.Add(t - lastTime); first = false; lastTime = t; last = now; }
                 else Thread.Sleep(0);
             }
             Application.DoEvents(); form.Refresh();
+            if (starts.Count == 1 && middle is not null)
+            {
+                // Mid-slide, everything right of the edge must be the finished page shifted by the edge (no stale strips).
+                using var open = SlideOverlay.FromScreen(host); int wrong = 0, total = 0;
+                for (var y = 4; y < open.Height; y += 9) for (var x = middleEdge + 2; x < open.Width; x += 9)
+                {
+                    var a = middle.GetPixel(x, y); var b = open.GetPixel(x - middleEdge, y); total++;
+                    if (Math.Abs(a.R - b.R) + Math.Abs(a.G - b.G) + Math.Abs(a.B - b.B) > 60) wrong++;
+                }
+                middle.Save(Path.GetFullPath("artifacts/previews/slide-middle.png"));
+                if (total == 0 || wrong * 50 > total) throw new Exception($"Settings slide shows stale pixels: {wrong} of {total} samples differ from the page");
+                Console.WriteLine($"MOTION slide frame matches the page ({wrong} of {total} samples differ)");
+            }
         }
         var drift = new List<double>();
         var upscale = new List<double>(); using var probe = new Bitmap(4, 4); using var probeGraphics = Graphics.FromImage(probe);

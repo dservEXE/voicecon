@@ -47,19 +47,30 @@ public static class Backdrop
         for (var current = control; current is not null; current = current.Parent)
         {
             if (current is Form f) { form = f; break; }
-            x += current.Left; y += current.Top;
+            // A page rendered off-screen samples the canvas as if it already stood where it will be shown.
+            var place = current == renderRoot ? renderOrigin : current.Location;
+            x += place.X; y += place.Y;
         }
         if (form is null || form.ClientSize.Width < 8 || form.ClientSize.Height < 8) { using var fill = new SolidBrush(UiTheme.Current.Background); graphics.FillRectangle(fill, area); return; }
         // The canvas is kept at half resolution (a soft gradient loses nothing); each pixel covers a 2×2 block.
         var image = CanvasFor(form);
         int left = (area.X + x) / 2, top = (area.Y + y) / 2, right = (area.Right + x + 1) / 2, bottom = (area.Bottom + y + 1) / 2;
         var source = Rectangle.FromLTRB(Math.Max(0, left), Math.Max(0, top), Math.Min(image.Width, right), Math.Min(image.Height, bottom));
+        if (source.Width * 2 < area.Width || source.Height * 2 < area.Height) { using var fill = new SolidBrush(UiTheme.Current.Background); graphics.FillRectangle(fill, area); }
         if (source.Width <= 0 || source.Height <= 0) return;
         var state = graphics.Save();
         graphics.SetClip(area, CombineMode.Intersect);
         graphics.InterpolationMode = InterpolationMode.NearestNeighbor; graphics.PixelOffsetMode = PixelOffsetMode.Half; graphics.CompositingMode = CompositingMode.SourceCopy;
         graphics.DrawImage(image, new Rectangle(source.X * 2 - x, source.Y * 2 - y, source.Width * 2, source.Height * 2), source, GraphicsUnit.Pixel);
         graphics.Restore(state);
+    }
+    [ThreadStatic] private static Control? renderRoot;
+    [ThreadStatic] private static Point renderOrigin;
+    /// <summary>Renders <paramref name="control"/> as it will look at <paramref name="location"/> in its parent, wherever it is now.</summary>
+    public static T RenderAt<T>(Control control, Point location, Func<T> render)
+    {
+        var (root, origin) = (renderRoot, renderOrigin); renderRoot = control; renderOrigin = location;
+        try { return render(); } finally { renderRoot = root; renderOrigin = origin; }
     }
     /// <summary>Opaque colour behind a control, for native children (text boxes, labels) that need a BackColor.</summary>
     public static Color Approximate(Control control) => control is ISurface surface ? surface.Face : Behind(control);

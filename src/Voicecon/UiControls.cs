@@ -283,15 +283,18 @@ public sealed class ToggleRow : CheckBox
     }
     private float S => DeviceDpi / 96f;
     private RectangleF Track => new(Width - 56 * S, 7 * S, 48 * S, 26 * S);
+    // The switch handles the mouse itself: a press and release without travel toggles it like an ordinary switch,
+    // a drag moves the knob and it settles on the side where it is let go. The framework's own click (it needs the
+    // capture untouched) is ignored for the mouse and kept for the keyboard (Space).
     protected override void OnMouseDown(MouseEventArgs e)
     {
         handled = false;
-        if (e.Button == MouseButtons.Left && RectangleF.Inflate(Track, 6 * S, 6 * S).Contains(e.Location)) { pressed = true; dragging = false; downX = e.X; downPosition = position; Capture = true; }
+        if (e.Button == MouseButtons.Left && Enabled) { pressed = true; dragging = false; downX = e.X; downPosition = position; Capture = true; }
         base.OnMouseDown(e);
     }
     protected override void OnMouseMove(MouseEventArgs e)
     {
-        if (pressed && (dragging || Math.Abs(e.X - downX) > 3 * S))
+        if (pressed && (dragging || Math.Abs(e.X - downX) > 4 * S && RectangleF.Inflate(Track, 10 * S, 10 * S).Contains(downX, e.Y)))
         {
             dragging = true; UiMotion.Cancel(this);
             position = Math.Clamp(downPosition + (e.X - downX) / (22 * S), 0, 1); Invalidate();
@@ -300,10 +303,18 @@ public sealed class ToggleRow : CheckBox
     }
     protected override void OnMouseUp(MouseEventArgs e)
     {
-        if (pressed) { pressed = false; Capture = false; if (dragging) { handled = true; Settle(); } dragging = false; }
+        var wasPressed = pressed && e.Button == MouseButtons.Left;
+        if (wasPressed)
+        {
+            pressed = false; handled = true;
+            if (dragging) Settle(); else if (ClientRectangle.Contains(e.Location)) Checked = !Checked;
+            dragging = false;
+        }
         base.OnMouseUp(e);
+        if (wasPressed && Capture) Capture = false;
     }
-    protected override void OnMouseCaptureChanged(EventArgs e) { if (pressed && !Capture) { pressed = false; if (dragging) { handled = true; Settle(); } dragging = false; } base.OnMouseCaptureChanged(e); }
+    protected override void OnMouseCaptureChanged(EventArgs e) { if (pressed && !Capture) { pressed = false; handled = true; if (dragging) Settle(); dragging = false; } base.OnMouseCaptureChanged(e); }
+    protected override void OnKeyDown(KeyEventArgs e) { handled = false; base.OnKeyDown(e); }
     /// <summary>Released past the middle switches; otherwise the knob slides back.</summary>
     private void Settle()
     {
@@ -313,7 +324,6 @@ public sealed class ToggleRow : CheckBox
     }
     protected override void OnClick(EventArgs e)
     {
-        // A drag already decided the state; a plain click (or Space) toggles.
         if (!handled && Enabled) Checked = !Checked;
         handled = false; base.OnClick(e);
     }

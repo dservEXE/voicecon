@@ -122,6 +122,7 @@ internal static partial class Setup
                 var startMenu = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs"); Directory.CreateDirectory(startMenu); Shortcut(Path.Combine(startMenu, "Voicecon.lnk"), executable);
                 if (desktop.Checked) Shortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Voicecon.lnk"), executable);
                 else foreach (var source in stopped) UpdateOwnedShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Voicecon.lnk"), source, executable);
+                RefreshIcons(stopped.Count > 0 ? stopped[0] : executable, executable);
                 if (launch.Checked) Process.Start(new ProcessStartInfo(executable) { UseShellExecute = false });
                 committed = true; TryDelete(backup);
                 foreach (var source in stopped) CleanupPortableSource(source, executable);

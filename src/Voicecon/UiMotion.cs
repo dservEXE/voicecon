@@ -146,21 +146,28 @@ public sealed class SlideOverlay : Control
     /// <summary>A control rendered off-screen (it may be hidden behind others or outside its parent).</summary>
     public static Bitmap Render(Control control)
     {
+        // Printing only reaches children whose windows exist; a page never shown yet has none, so create them first.
+        Realize(control);
         var bitmap = new Bitmap(Math.Max(1, control.Width), Math.Max(1, control.Height));
         control.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size)); return bitmap;
+    }
+    private static void Realize(Control control)
+    {
+        if (!control.IsHandleCreated) _ = control.Handle;
+        foreach (Control child in control.Controls) if (child.Visible) Realize(child);
     }
     public void Begin(Bitmap below, Bitmap above, int start)
     {
         End(); under = below.GetHbitmap(); over = above.GetHbitmap(); below.Dispose(); above.Dispose();
         edge = start; Visible = true; BringToFront(); Invalidate();
     }
-    /// <summary>Moves the page's left edge; only the strip that changed is repainted.</summary>
+    /// <summary>Moves the page's left edge. The view under it stays put, so only the page side (and the shade) is repainted —
+    /// the whole page side, since every pixel of the page moves with it.</summary>
     public void SetEdge(int x)
     {
         if (x == edge) return;
-        var shade = Shade;
-        var left = Math.Min(x, edge) - shade; var right = Math.Max(x, edge) + 1;
-        edge = x; Invalidate(new Rectangle(left, 0, right - left, Height));
+        var left = Math.Max(0, Math.Min(x, edge) - Shade - 1);
+        edge = x; Invalidate(new Rectangle(left, 0, Width - left, Height));
     }
     private int Shade => (int)(22 * DeviceDpi / 96f);
     public void End()

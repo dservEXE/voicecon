@@ -224,7 +224,7 @@ public sealed partial class MainForm
             if (!settingsDrawer.Visible) settingsDrawer.Visible = true;
             settingsDrawer.PerformLayout(); CenterSettings();
             slide.Bounds = new Rectangle(Point.Empty, mainHost.ClientSize);
-            slide.Begin(under, SlideOverlay.Render(settingsDrawer), mainHost.Width);
+            slide.Begin(under, RenderSettingsPage(), mainHost.Width);
         }
         var start = drawerProgress;
         UiMotion.Run(settingsDrawer, this, 300, p => { drawerProgress = start + (1 - start) * p; slide.SetEdge(SheetLeft(drawerProgress)); },
@@ -247,12 +247,14 @@ public sealed partial class MainForm
         UiMotion.Run(settingsDrawer, this, 260, p => { drawerProgress = start * (1 - p); slide.SetEdge(SheetLeft(drawerProgress)); },
             () => { settingsDrawer.Visible = false; slide.End(); }, glide: true);
     }
+    /// <summary>The page as it will look once open (it is laid out off to the right, so the canvas is sampled at its final place).</summary>
+    internal Bitmap RenderSettingsPage() => Backdrop.RenderAt(settingsDrawer, Point.Empty, () => SlideOverlay.Render(settingsDrawer));
     /// <summary>Renders the page once off-screen after start-up, so the first slide does not pay for shadow templates and layout.</summary>
     private void WarmSettings()
     {
         if (IsDisposed || settingsOpen || settingsDrawer.Visible || slide.Active || mainHost.Width < 10) return;
         drawerProgress = 0; PlaceDrawer(true); settingsDrawer.Visible = true; settingsDrawer.PerformLayout(); CenterSettings();
-        using (SlideOverlay.Render(settingsDrawer)) { }
+        using (RenderSettingsPage()) { }
         if (!settingsOpen) settingsDrawer.Visible = false;
     }
     private int SheetLeft(float progress) => (int)Math.Round(mainHost.Width * (1 - progress));

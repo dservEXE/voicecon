@@ -60,6 +60,7 @@ internal static partial class Setup
                     UpdateOwnedShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Voicecon.lnk"), source, target);
                     var menu = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs"); Directory.CreateDirectory(menu); Shortcut(Path.Combine(menu, "Voicecon.lnk"), target);
                     Process.Start(new ProcessStartInfo(target, "--cleanup-update " + Quoted(cleanup) + " " + Process.GetCurrentProcess().Id) { UseShellExecute = false }); launched = true;
+                    RefreshIcons(source, target);
                     TryDelete(backup);
                     CleanupPortableSource(source, target);
                 }
@@ -140,6 +141,29 @@ internal static partial class Setup
             dynamic link = type.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { location });
             string path = link.TargetPath;
             if (string.Equals(path, oldPath, StringComparison.OrdinalIgnoreCase) || string.Equals(path, target, StringComparison.OrdinalIgnoreCase)) Shortcut(location, target);
+        }
+        catch { }
+    }
+    [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern void SHChangeNotify(int eventId, int flags, string item1, IntPtr item2);
+    /// <summary>
+    /// Explorer caches icons by file path, so a replaced Voicecon.exe keeps showing the old icon on the desktop, in Start
+    /// and on the taskbar. Re-points the taskbar pins and tells the shell that these files (and icons in general) changed.
+    /// </summary>
+    private static void RefreshIcons(string oldPath, string target)
+    {
+        try
+        {
+            var items = new System.Collections.Generic.List<string>();
+            items.Add(target);
+            items.Add(Path.Combine(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs"), "Voicecon.lnk"));
+            items.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Voicecon.lnk"));
+            var pins = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), @"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar");
+            if (Directory.Exists(pins)) foreach (var pin in Directory.GetFiles(pins, "*.lnk")) { UpdateOwnedShortcut(pin, oldPath ?? target, target); items.Add(pin); }
+            foreach (var item in items) if (File.Exists(item)) SHChangeNotify(0x00002000, 0x0005, item, IntPtr.Zero); // SHCNE_UPDATEITEM, SHCNF_PATHW
+            SHChangeNotify(0x08000000, 0x0000, null, IntPtr.Zero); // SHCNE_ASSOCCHANGED: cached icons are dropped
+            var refresher = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "ie4uinit.exe");
+            if (File.Exists(refresher)) using (var process = Process.Start(new ProcessStartInfo(refresher, "-show") { UseShellExecute = false, CreateNoWindow = true })) { if (process != null) process.WaitForExit(5000); }
         }
         catch { }
     }
