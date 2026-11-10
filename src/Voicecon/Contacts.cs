@@ -15,7 +15,7 @@ public sealed record FriendCard(string Id, string Name, string Inbox, string Pub
             if (!code.StartsWith("VCF1.") || code.Length > 4000) throw new FormatException();
             var text = code[5..].Replace('-', '+').Replace('_', '/'); text = text.PadRight((text.Length + 3) / 4 * 4, '=');
             var card = JsonSerializer.Deserialize<FriendCard>(Convert.FromBase64String(text)) ?? throw new FormatException();
-            if (card.Name.Length is < 1 or > 48 || card.Inbox.Length != 39 || !card.Inbox.StartsWith("vc-") || card.Inbox[3..].Any(c => !char.IsAsciiHexDigit(c))) throw new FormatException();
+            if (card.Name.Length is < 1 or > 48 || !ContactBook.ValidInbox(card.Inbox)) throw new FormatException();
             if (card.Id != ContactBook.KeyId(card.PublicKey)) throw new FormatException();
             using var key = ECDiffieHellman.Create(); key.ImportSubjectPublicKeyInfo(Convert.FromBase64String(card.PublicKey), out _);
             if (key.KeySize != 256 || !Uri.TryCreate(card.Server, UriKind.Absolute, out var uri) || uri.Scheme != "https" || uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0) throw new FormatException();
@@ -26,37 +26,85 @@ public sealed record FriendCard(string Id, string Name, string Inbox, string Pub
     }
 }
 
+/// <summary>contacts.json exists but cannot be used: damaged JSON, or a key protected for another Windows account.</summary>
+/// Deliberately not an IOException: callers treat IOException as transient and leave the file alone.
+public sealed class ContactBookCorruptException(string message, Exception? inner = null) : Exception(message, inner);
+
 public sealed class ContactBook : IDisposable
 {
     private readonly ECDiffieHellman key;
     private readonly string path;
     private readonly string inbox;
     private readonly object sync = new();
+    // Records that no longer pass validation are kept verbatim so a later version (or a manual fix) can recover them.
+    private readonly List<FriendCard> unreadable = [];
     public string Id { get; }
     public string PublicKey { get; }
     public List<FriendCard> Friends { get; } = [];
+    public int UnreadableFriends { get { lock (sync) return unreadable.Count; } }
+    /// <exception cref="ContactBookCorruptException">The file exists but its contents or key cannot be used.</exception>
+    /// <exception cref="IOException">The file could not be read right now; it is left untouched.</exception>
     public ContactBook(string? directory = null)
     {
-        path = Path.Combine(directory ?? Path.GetDirectoryName(Settings.FilePath)!, "contacts.json");
+        path = PathFor(directory);
         key = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
-        if (File.Exists(path))
+        try
         {
-            var data = JsonSerializer.Deserialize<Stored>(File.ReadAllText(path)) ?? throw new IOException("Не удалось прочитать контакты.");
-            var secret = ProtectedData.Unprotect(Convert.FromBase64String(data.ProtectedKey), null, DataProtectionScope.CurrentUser);
-            try { key.ImportPkcs8PrivateKey(secret, out _); } finally { CryptographicOperations.ZeroMemory(secret); }
-            inbox = data.Inbox;
-            foreach (var card in data.Friends) Friends.Add(FriendCard.Decode(card.Encode()));
+            if (File.Exists(path))
+            {
+                var data = Read(path, key);
+                inbox = data.Inbox;
+                foreach (var card in data.Friends ?? [])
+                {
+                    if (card is null) continue;
+                    try { var friend = FriendCard.Decode(card.Encode()); Friends.RemoveAll(f => f.Id == friend.Id); Friends.Add(friend); }
+                    catch (FormatException) { unreadable.Add(card); }
+                }
+            }
+            else inbox = "vc-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(18)).ToLowerInvariant();
+            PublicKey = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo()); Id = KeyId(PublicKey);
+            if (!File.Exists(path)) Save();
         }
-        else inbox = "vc-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(18)).ToLowerInvariant();
-        PublicKey = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo()); Id = KeyId(PublicKey);
-        if (!File.Exists(path)) Save();
+        catch { key.Dispose(); throw; }
     }
+    private static string PathFor(string? directory) => Path.Combine(directory ?? Path.GetDirectoryName(Settings.FilePath)!, "contacts.json");
+    private static Stored Read(string path, ECDiffieHellman key)
+    {
+        var text = File.ReadAllText(path); // IOException here is transient and propagates unchanged.
+        Stored? data;
+        try { data = JsonSerializer.Deserialize<Stored>(text); }
+        catch (JsonException ex) { throw new ContactBookCorruptException("Файл contacts.json повреждён.", ex); }
+        if (data is null || string.IsNullOrEmpty(data.ProtectedKey) || !ValidInbox(data.Inbox)) throw new ContactBookCorruptException("Файл contacts.json повреждён или неполон.");
+        byte[] secret;
+        try { secret = ProtectedData.Unprotect(Convert.FromBase64String(data.ProtectedKey), null, DataProtectionScope.CurrentUser); }
+        catch (FormatException ex) { throw new ContactBookCorruptException("Файл contacts.json повреждён: ключ записан неверно.", ex); }
+        catch (CryptographicException ex) { throw new ContactBookCorruptException("Ключ контактов не расшифровывается. Обычно так бывает, если файл перенесён с другого компьютера или из другой учётной записи Windows.", ex); }
+        try
+        {
+            key.ImportPkcs8PrivateKey(secret, out _);
+            if (key.KeySize != 256) throw new CryptographicException("Unexpected key size");
+        }
+        catch (CryptographicException ex) { throw new ContactBookCorruptException("Файл contacts.json содержит неверный ключ.", ex); }
+        finally { CryptographicOperations.ZeroMemory(secret); }
+        return data;
+    }
+    /// <summary>Moves an unusable contacts.json aside (never deletes it) so a new profile can be created. Returns the backup path.</summary>
+    public static string PreserveCorrupt(string? directory = null)
+    {
+        var source = PathFor(directory);
+        var folder = Path.GetDirectoryName(source)!;
+        var backup = Path.Combine(folder, $"contacts.broken-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        if (File.Exists(backup)) backup = Path.Combine(folder, $"contacts.broken-{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.json");
+        File.Move(source, backup);
+        return backup;
+    }
+    public static bool ValidInbox(string? inbox) => inbox is { Length: 39 } && inbox.StartsWith("vc-", StringComparison.Ordinal) && inbox[3..].All(char.IsAsciiHexDigit);
     public static string KeyId(string publicKey) => Convert.ToHexString(SHA256.HashData(Convert.FromBase64String(publicKey))).ToLowerInvariant()[..32];
     public FriendCard OwnCard(string name, string server) => new(Id, name.Trim()[..Math.Min(name.Trim().Length, 48)], inbox, PublicKey, server.TrimEnd('/'));
     public void Add(FriendCard friend)
     {
         if (friend.Id == Id) throw new InvalidOperationException("Это ваш собственный код.");
-        lock (sync) { Friends.RemoveAll(f => f.Id == friend.Id); Friends.Add(friend); Save(); }
+        lock (sync) { Friends.RemoveAll(f => f.Id == friend.Id); unreadable.RemoveAll(f => f.Id == friend.Id); Friends.Add(friend); Save(); }
     }
     public void Remove(string id) { lock (sync) { Friends.RemoveAll(f => f.Id == id); Save(); } }
     private byte[] SharedKey(FriendCard friend)
@@ -102,13 +150,13 @@ public sealed class ContactBook : IDisposable
         try
         {
             var protectedKey = ProtectedData.Protect(secret, null, DataProtectionScope.CurrentUser);
-            var data = JsonSerializer.Serialize(new Stored(inbox, Convert.ToBase64String(protectedKey), Friends.ToArray()));
+            var data = JsonSerializer.Serialize(new Stored(inbox, Convert.ToBase64String(protectedKey), [.. Friends, .. unreadable]));
             File.WriteAllText(path + ".tmp", data); File.Move(path + ".tmp", path, true);
         }
         finally { CryptographicOperations.ZeroMemory(secret); }
     }
     public void Dispose() { lock (sync) key.Dispose(); }
-    private sealed record Stored(string Inbox, string ProtectedKey, FriendCard[] Friends);
+    private sealed record Stored(string Inbox, string ProtectedKey, FriendCard?[]? Friends);
     private sealed record Envelope(string F, string N, string T, string C);
 }
 

@@ -143,15 +143,55 @@ public sealed partial class MainForm : Form
         if (busy) return; busy = true; RefreshControls();
         try { await action(); }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { SetStatus("Не удалось выполнить действие", ex.Message); SetHint(ex.Message); }
+        catch (Exception ex)
+        {
+            // Validation messages are expected; everything else is worth a diagnostic record.
+            if (ex is not (InvalidOperationException or FormatException)) AppLog.Error("Ошибка действия", ex);
+            SetStatus("Не удалось выполнить действие", ex.Message); SetHint(ex.Message);
+        }
         finally { busy = false; RefreshControls(); }
     }
     private void InitializeContacts()
     {
         if (initialized || previewMode) return; initialized = true;
-        try { contacts = new ContactBook(); RefreshFriends(); StartMailbox(); }
-        catch (Exception ex) { delivery.Text = "Контакты недоступны"; SetHint(ex.Message); }
+        string? notice = settings.RecoveredFrom is { } settingsBackup
+            ? "Файл настроек был повреждён, восстановлены настройки по умолчанию. Копия старого файла: " + Path.GetFileName(settingsBackup) + "."
+            : null;
+        try { contacts = new ContactBook(); }
+        catch (ContactBookCorruptException ex)
+        {
+            AppLog.Error("Файл контактов не открыт", ex);
+            if (!ConfirmContactsReset(ex)) { delivery.Text = "Контакты недоступны"; SetHint(ex.Message + " Файл контактов не изменён; входящие звонки недоступны."); return; }
+            try
+            {
+                var backup = ContactBook.PreserveCorrupt();
+                contacts = new ContactBook();
+                AppLog.Info("Создан новый профиль контактов, старый файл сохранён");
+                notice = Join(notice, "Создан новый профиль контактов. Старый файл сохранён: " + Path.GetFileName(backup) + ". Отправьте друзьям новый код и добавьте их коды заново.");
+            }
+            catch (Exception inner) { AppLog.Error("Не удалось создать новый профиль контактов", inner); delivery.Text = "Контакты недоступны"; SetHint(inner.Message); return; }
+        }
+        catch (Exception ex)
+        {
+            // Transient read errors (file locked, disk unavailable): leave the file untouched.
+            AppLog.Error("Не удалось загрузить контакты", ex);
+            delivery.Text = "Контакты недоступны"; SetHint(ex.Message + " Файл контактов не изменён; перезапустите Voicecon."); return;
+        }
+        if (contacts.UnreadableFriends > 0)
+            notice = Join(notice, $"Не удалось прочитать контактов: {contacts.UnreadableFriends}. Они сохранены в файле, но недоступны для звонков. Попросите у этих друзей код заново.");
+        try { RefreshFriends(); StartMailbox(); }
+        catch (Exception ex) { AppLog.Error("Не удалось запустить доставку звонков", ex); delivery.Text = "Контакты недоступны"; SetHint(ex.Message); return; }
+        if (notice is not null) SetHint(notice);
     }
+    private static string Join(string? first, string second) => first is null ? second : first + " " + second;
+    private bool ConfirmContactsReset(ContactBookCorruptException error) =>
+        MessageBox.Show(
+            "Файл контактов не удалось открыть.\n" + error.Message +
+            "\n\nСоздать новый профиль контактов?\n\n" +
+            "• Старый файл будет сохранён рядом как резервная копия, ничего не удаляется.\n" +
+            "• Ваш код друга изменится: отправьте его друзьям заново и добавьте их коды повторно.\n\n" +
+            "«Нет» — оставить всё как есть; входящие звонки будут недоступны до следующего запуска.",
+            "Voicecon · контакты", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
     private void StartMailbox()
     {
         if (contacts is null || previewMode) return;
@@ -161,7 +201,7 @@ public sealed partial class MainForm : Form
         mailbox.Received += (friend, signal) => Dispatch(async () =>
         {
             if (mailbox != current) return;
-            try { await OnSignal(friend, signal); } catch (Exception ex) { SetHint("Звонок: " + ex.Message); }
+            try { await OnSignal(friend, signal); } catch (Exception ex) { AppLog.Error("Ошибка обработки входящего сигнала", ex); SetHint("Звонок: " + ex.Message); }
         });
         delivery.Text = "●  Подключаем доставку звонков…"; mailbox.Start();
     }

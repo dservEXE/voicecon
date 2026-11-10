@@ -50,11 +50,47 @@ public sealed class Settings
     public static readonly string FilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Voicecon", "settings.json");
 
-    public static Settings Load()
+    /// <summary>Path of the backup made when the last load had to fall back to defaults; null if the file was fine.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? RecoveredFrom { get; private set; }
+
+    public static Settings Load() => Load(FilePath);
+    public static Settings Load(string path)
     {
-        try { return Parse(File.ReadAllText(FilePath)); } catch { return new(); }
+        string json;
+        try
+        {
+            if (!File.Exists(path)) return new();
+            json = File.ReadAllText(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            AppLog.Error("Не удалось прочитать настройки", ex);
+            return new() { RecoveredFrom = Preserve(path) };
+        }
+        if (TryParse(json) is { } value) return value;
+        AppLog.Info("Файл настроек повреждён, используются настройки по умолчанию");
+        return new() { RecoveredFrom = Preserve(path) };
     }
-    public static Settings Parse(string json)
+    /// <summary>Copies an unusable settings file aside before defaults overwrite it on the next save.</summary>
+    private static string? Preserve(string path)
+    {
+        try
+        {
+            var folder = Path.GetDirectoryName(path)!;
+            var backup = Path.Combine(folder, $"settings.broken-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+            if (File.Exists(backup)) backup = Path.Combine(folder, $"settings.broken-{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.json");
+            File.Copy(path, backup);
+            return backup;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            AppLog.Error("Не удалось сохранить копию повреждённых настроек", ex);
+            return null;
+        }
+    }
+    public static Settings Parse(string json) => TryParse(json) ?? new();
+    private static Settings? TryParse(string json)
     {
         try
         {
@@ -75,7 +111,7 @@ public sealed class Settings
             if (value.TalkKey is not (0x56 or 0x14 or 0x05 or 0x06)) value.TalkKey = 0x56;
             return value;
         }
-        catch { return new(); }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException or ArgumentException) { return null; }
     }
 
     public void Save()

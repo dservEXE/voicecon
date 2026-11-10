@@ -44,11 +44,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Media source cache release failed.' }
           }
           exit 0
-      - name: Test update and audio logic
+      - name: Run checks before publishing
         if: env.PUBLISHED == 'false'
         shell: pwsh
         run: |
-          dotnet run --project tests/Voicecon.Checks -c Release -- --update-checks
+          # Core suite: contact crypto, invite codes, Opus/jitter, WebRTC transport, 3- and 6-person rooms, chat, video channel.
+          # Local-only loopback: no microphone, camera, desktop capture or public network.
+          dotnet run --project tests/Voicecon.Checks -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --project tests/Voicecon.Checks -c Release --no-build -- --update-checks
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet run --project tests/Voicecon.Checks -c Release --no-build -- --notification-checks
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -70,5 +74,13 @@ jobs:
         if: env.PUBLISHED == 'false'
         shell: pwsh
         run: |
-          gh release create "v$env:VERSION" artifacts/Voicecon-Setup.exe artifacts/Voicecon.exe artifacts/SHA256SUMS.txt --target $env:GITHUB_SHA --title "Voicecon $env:VERSION" --notes 'Windows x64. Install Voicecon-Setup.exe once; future updates appear as an optional highlighted banner in the app. Profiles are preserved and previous installed versions are replaced.' --latest
+          $footer = 'Windows x64. Install Voicecon-Setup.exe once; future updates appear as an optional highlighted banner in the app. Profiles are preserved and previous installed versions are replaced.'
+          $notes = $footer
+          # RELEASE_NOTES.md is used only when its first line names this exact version, so stale notes never reach a new release.
+          if ((Test-Path RELEASE_NOTES.md) -and ((Get-Content RELEASE_NOTES.md -TotalCount 1) -match ('(?<![\d.])' + [regex]::Escape($env:VERSION) + '(?![\d.])'))) {
+            $notes = (Get-Content RELEASE_NOTES.md -Raw -Encoding utf8).Trim() + "`n`n---`n`n" + $footer
+          } else { Write-Warning "RELEASE_NOTES.md does not describe $env:VERSION; publishing the default notes." }
+          $notesFile = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          Set-Content -LiteralPath $notesFile -Value $notes -Encoding utf8
+          gh release create "v$env:VERSION" artifacts/Voicecon-Setup.exe artifacts/Voicecon.exe artifacts/SHA256SUMS.txt --target $env:GITHUB_SHA --title "Voicecon $env:VERSION" --notes-file $notesFile --latest
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }

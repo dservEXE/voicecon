@@ -120,7 +120,7 @@ public sealed class VoiceRoom : IDisposable
             try { await OnMessage(member, text); }
             catch (OperationCanceledException) { }
             catch (ObjectDisposedException) { }
-            catch (Exception ex) { if (!disposed) Error?.Invoke("Ошибка подключения участника: " + ex.Message); }
+            catch (Exception ex) { AppLog.Error("Ошибка служебного сообщения участника", ex); if (!disposed) Error?.Invoke("Ошибка подключения участника: " + ex.Message); }
         });
         member.Session.PacketReceived += (seq, data) => Audio?.Jitter.Receive(member.Id, seq, data);
                 member.Session.ShareAudioReceived += bytes =>
@@ -340,11 +340,16 @@ public sealed class VoiceRoom : IDisposable
     }
     private async void ArmTimeout(Member member)
     {
-        await Task.Delay(TimeSpan.FromSeconds(45));
-        if (disposed || !members.ContainsValue(member) || member.Connected) return;
-        Remove(member.Id);
-        Status?.Invoke("Не удалось подключить участника. Проверьте коды, брандмауэр или настройте TURN.");
-        Changed?.Invoke();
+        // async void: any exception here would otherwise crash the UI thread.
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(45));
+            if (disposed || !members.ContainsValue(member) || member.Connected) return;
+            Remove(member.Id);
+            Status?.Invoke("Не удалось подключить участника. Проверьте коды, брандмауэр или настройте TURN.");
+            Changed?.Invoke();
+        }
+        catch (Exception ex) { AppLog.Error("Ошибка тайм-аута подключения участника", ex); }
     }
     private void Remove(string key)
     {
@@ -389,4 +394,3 @@ public sealed class VoiceRoom : IDisposable
         public Dictionary<string, string>? Peers { get; set; }
     }
 }
-

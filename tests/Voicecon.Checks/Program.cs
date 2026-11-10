@@ -32,9 +32,10 @@ internal static class Program
                 if (args.Contains("--mailbox-check")) { await FeatureChecks.CheckMailbox(); return; }
                 if (args.Contains("--call-flow-check")) { await FeatureChecks.CheckCallFlow(); return; }
                 FeatureChecks.CheckIdentityAndVideo();
+                if (args.Contains("--resilience")) { ResilienceChecks.Check(); return; }
                 if (args.Contains("--network")) { await CheckPublicStun(); return; }
                 if (args.Contains("--benchmark")) { await CheckBenchmark(); return; }
-                CheckCodes(); CheckNoise(); CheckJitter();
+                ResilienceChecks.Check(); CheckCodes(); CheckNoise(); CheckJitter();
                 await CheckTransport(); await CheckConference();
                 Console.WriteLine("ALL CHECKS PASSED");
             }
