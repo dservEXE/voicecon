@@ -30,7 +30,7 @@ public sealed class ModernScrollBar : Control
         var channel = new RectangleF(Width / 2f - 3, 4, 6, Math.Max(1, Height - 8));
         Neu.Inset(e.Graphics, channel, 3, 1, 0.35f);
         var thumbRect = Thumb; thumbRect.Inflate(-narrow, 0);
-        using var brush = new SolidBrush(dragging || hovered ? UiTheme.WithAlpha(t.Accent, 230) : UiTheme.Blend(Backdrop.Behind(this), Color.White, 0.22f));
+        using var brush = new SolidBrush(dragging || hovered ? UiTheme.WithAlpha(t.Accent, 230) : UiTheme.Blend(Backdrop.Behind(this), UiTheme.Current.Dark ? Color.White : Color.FromArgb(90, 100, 125), UiTheme.Current.Dark ? 0.22f : 0.4f));
         using var thumb = UiTheme.Rounded(thumbRect, Math.Max(2, thumbRect.Width / 2f)); e.Graphics.FillPath(brush, thumb);
     }
     protected override void OnMouseDown(MouseEventArgs e)
@@ -59,7 +59,7 @@ public class ThemedScrollHost : BackdropPanel, IMessageFilter
     public ThemedScrollHost()
     {
         DoubleBuffered = true; AutoScroll = false; Margin = Padding.Empty;
-        base.Controls.Add(viewport); base.Controls.Add(bar); bar.BringToFront(); bar.ValueChanged += (_, _) => { if (content is not null) content.Top = -bar.Value; };
+        base.Controls.Add(viewport); base.Controls.Add(bar); bar.BringToFront(); bar.ValueChanged += (_, _) => { if (content is null) return; content.Top = -bar.Value; if (Backdrop.Glow && Backdrop.OnCanvas(this)) Backdrop.InvalidateCanvas(content); };
         viewport.SizeChanged += (_, _) => UpdateRange(); MouseWheel += Wheel; viewport.MouseWheel += Wheel;
     }
     public void SetContent(Control control)

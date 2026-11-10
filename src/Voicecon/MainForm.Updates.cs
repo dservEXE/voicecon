@@ -14,7 +14,7 @@ public sealed partial class MainForm
     private bool checkingUpdate, downloadingUpdate, updateStarted;
     private Control BuildUpdateBanner()
     {
-        var card = new SurfacePanel { Dock = DockStyle.Fill, Elevation = 0.8f, Padding = new Padding(16, 4, 10, 4), Wash = Color.FromArgb(30, UiTheme.Current.Accent) }; var row = Columns(-1, 236, 4, 104);
+        var card = new SurfacePanel { Dock = DockStyle.Fill, Elevation = 0.8f, Padding = new Padding(16, 7, 12, 7), Wash = Color.FromArgb(30, UiTheme.Current.Accent) }; var row = Columns(-1, 236, 4, 104);
         PrepareLabel(updateHeadline, TextTone.Normal); updateHeadline.Font = UiTheme.Heading; updateHeadline.Text = "Есть обновление Voicecon";
         PrepareButton(bannerUpdate, "Обновить", UiIcon.Arrow, ButtonTone.Primary); PrepareButton(laterUpdate, "Позже", UiIcon.None, ButtonTone.Quiet);
         row.Controls.Add(updateHeadline, 0, 0); row.Controls.Add(bannerUpdate, 1, 0); row.Controls.Add(laterUpdate, 3, 0); card.Controls.Add(row);
@@ -39,7 +39,7 @@ public sealed partial class MainForm
         installUpdate.Enabled = bannerUpdate.Enabled = enabled;
         installUpdate.Text = bannerUpdate.Text = downloadingUpdate ? "Загружаем…" : availableUpdate is { } release ? "Обновить до " + release.Version.ToString(3) : "Обновить";
         if (availableUpdate is { } next) updateHeadline.Text = "Новая версия " + next.Version.ToString(3) + (CallBusyForUpdate ? " · после звонка" : " · можно позже");
-        if (updateBannerRow is not null) updateBannerRow.Height = availableUpdate is { } found && settings.DismissedUpdate != found.Tag ? 84 : 0;
+        if (updateBannerRow is not null) updateBannerRow.Height = availableUpdate is { } found && settings.DismissedUpdate != found.Tag ? 90 : 0;
     }
     private void ScheduleUpdateCheck()
     {

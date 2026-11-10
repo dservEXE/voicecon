@@ -40,7 +40,26 @@ internal static class SessionFeatureChecks
         Invoke(form, "ShowPreviewCall"); var strip = Get<CallStrip>(form, "callStrip");
         Require(strip.Chips.OfType<CallStrip.PersonChip>().Count() == 2 && strip.Chips.OfType<CallStrip.OwnStreamChip>().Single().Viewers == 2 && strip.Chips.OfType<CallStrip.RemoteStreamChip>().Any(), "Call strip shows people, own stream with viewers and remote streams");
         Require(Get<SoftButton>(form, "endButton").Tone == ButtonTone.Danger && Get<SoftButton>(form, "shareButton").Tone == ButtonTone.Live, "Hang-up and stop-sharing are visually distinct");
-        Console.WriteLine("PASS stream window frames/fullscreen/Esc, 300% sliders, settings drawer, call strip, distinct hang-up vs stop-sharing; no visible windows or capture");
+        // Drag: the segment capsule and the switch knob follow the pointer and settle where they are let go.
+        void Mouse(Control target, string name, int x, int y) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic, [typeof(MouseEventArgs)])!.Invoke(target, [new MouseEventArgs(MouseButtons.Left, 1, x, y, 0)]);
+        using (var picker = new SegmentedPicker { Size = new Size(360, 52) })
+        {
+            picker.Options.AddRange([new("Обычный"), new("Игровой"), new("Эконом")]); picker.SetSilently(0); _ = picker.Handle; var changes = 0; picker.SelectedIndexChanged += (_, _) => changes++;
+            Mouse(picker, "OnMouseDown", 40, 26); for (var x = 40; x <= 300; x += 20) Mouse(picker, "OnMouseMove", x, 26); Mouse(picker, "OnMouseUp", 300, 26);
+            Require(picker.SelectedIndex == 2 && changes == 1, "Dragging the capsule to the end picks the last option once");
+            Mouse(picker, "OnMouseDown", 300, 26); Mouse(picker, "OnMouseMove", 270, 26); Mouse(picker, "OnMouseUp", 270, 26);
+            Require(picker.SelectedIndex == 2 && changes == 1, "A short drag settles back without a change");
+        }
+        using (var toggle = new ToggleRow { Size = new Size(320, 52), Text = "Шумоподавление" })
+        {
+            _ = toggle.Handle; var x0 = toggle.Width - 44;
+            Mouse(toggle, "OnMouseDown", x0, 20); Mouse(toggle, "OnMouseMove", x0 + 10, 20); Mouse(toggle, "OnMouseMove", x0 + 30, 20); Mouse(toggle, "OnMouseUp", x0 + 30, 20);
+            toggle.GetType().GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(toggle, [EventArgs.Empty]);
+            Require(toggle.Checked, "Dragging the knob across switches on, and the click after the drag does not undo it");
+            toggle.GetType().GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(toggle, [EventArgs.Empty]);
+            Require(!toggle.Checked, "A plain click still toggles");
+        }
+        Console.WriteLine("PASS stream window frames/fullscreen/Esc, 300% sliders, settings drawer, call strip, distinct hang-up vs stop-sharing, draggable segments and switches; no visible windows or capture");
     }
     private static void Prepare(Control c) { _ = c.Handle; c.PerformLayout(); foreach (Control child in c.Controls) Prepare(child); }
     private static void CheckPaint(Control target)

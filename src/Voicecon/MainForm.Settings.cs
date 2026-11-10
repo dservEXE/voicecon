@@ -5,13 +5,13 @@ namespace Voicecon;
 public sealed partial class MainForm
 {
     /// <summary>The settings page: a full sheet over the conversation area that slides in from the right.</summary>
-    private readonly SurfacePanel settingsDrawer = new() { Gutter = 0, Radius = 0, Elevation = 0 };
+    private readonly BackdropPanel settingsDrawer = new();
     private readonly ThemedScrollHost settingsScroller = new() { Dock = DockStyle.Fill };
     private readonly SlimSlider microphoneGain = new();
     private readonly UiLabel microphoneGainValue = new(), chatUsage = new();
     private readonly ThemeSwatches themes = new();
     private readonly SegmentedPicker animationPicker = new();
-    private readonly ToggleRow messageSounds = new(), showOnline = new(), showMetrics = new();
+    private readonly ToggleRow messageSounds = new(), showOnline = new(), showMetrics = new(), backgroundGlow = new();
     private readonly SoftButton closeSettings = new(), refresh = new(), network = new(), devToggle = new(), manualCodes = new(), clearHistory = new(), openLogs = new(), aboutButton = new(), copyCode = new();
     private TableLayoutPanel? devPanel, settingsPage, settingsTop;
     private RowStyle? devRow, devCardRow;
@@ -74,6 +74,8 @@ public sealed partial class MainForm
         animationPicker.SetSilently(UiMotion.Parse(settings.AnimationLevel) switch { MotionLevel.Minimal => 1, MotionLevel.Off => 2, _ => 0 }); animationPicker.AccessibleName = "Анимации";
         tips.SetToolTip(animationPicker, "Минимум: короткие переходы без декоративных эффектов. Выкл.: всё мгновенно.");
         AddRow(look, animationPicker, 48);
+        AddRow(look, Space(), 6);
+        SetupToggle(backgroundGlow, "Цветное переливание фона", "Мягкие пятна цвета вокруг карточек, медленно плывут", settings.BackgroundGlow); AddRow(look, backgroundGlow, 52);
         FinishCard(page, look);
 
         var keys = SettingsCard("Горячие клавиши", UiIcon.Sliders);
@@ -169,12 +171,13 @@ public sealed partial class MainForm
         showMetrics.CheckedChanged += (_, _) => { settings.ShowMetrics = showMetrics.Checked; if (!settings.ShowMetrics) metrics.Text = ""; SaveSettings(); };
         notifications.CheckedChanged += (_, _) => { settings.NotificationSounds = notifications.Checked; if (!notifications.Checked) sounds.StopCue(); UpdateCallFeedback(); SaveSettings(); };
         messageSounds.CheckedChanged += (_, _) => { settings.MessageSounds = messageSounds.Checked; SaveSettings(); };
+        backgroundGlow.CheckedChanged += (_, _) => { settings.BackgroundGlow = Backdrop.Glow = backgroundGlow.Checked; SaveSettings(); Invalidate(true); UpdateDrift(); };
         ringtones.SelectedIndexChanged += (_, _) => { settings.Ringtone = (ringtones.SelectedItem as Choice)?.Id ?? "boris"; SaveSettings(); };
         themes.ThemeChosen += id => { if (!applyingTheme) SwitchTheme(id); };
         animationPicker.SelectedIndexChanged += (_, _) =>
         {
             var level = animationPicker.SelectedIndex switch { 1 => MotionLevel.Minimal, 2 => MotionLevel.Off, _ => MotionLevel.Full };
-            UiMotion.Level = level; if (level != MotionLevel.Full) UiMotion.FinishAll(); settings.AnimationLevel = UiMotion.Format(level); settings.Animations = level != MotionLevel.Off; SaveSettings();
+            UiMotion.Level = level; if (level != MotionLevel.Full) UiMotion.FinishAll(); UpdateDrift(); settings.AnimationLevel = UiMotion.Format(level); settings.Animations = level != MotionLevel.Off; SaveSettings();
         };
         micKey.Captured += (_, _) => ChangeHotkey(micKey, 0); earsKey.Captured += (_, _) => ChangeHotkey(earsKey, 1); openKey.Captured += (_, _) => ChangeHotkey(openKey, 2);
         screenKey.Captured += (_, _) => ChangeHotkey(screenKey, 3); cameraKey.Captured += (_, _) => ChangeHotkey(cameraKey, 4);

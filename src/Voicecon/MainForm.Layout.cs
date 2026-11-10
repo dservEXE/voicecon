@@ -92,7 +92,7 @@ public sealed partial class MainForm
         AddRow(grid, stripHost, 0); stripRow = grid.RowStyles[^1];
 
         AddRow(grid, BuildChatCard(), 0); grid.RowStyles[^1].SizeType = SizeType.Percent; grid.RowStyles[^1].Height = 100;
-        AddRow(grid, BuildBottomBar(), 86);
+        AddRow(grid, BuildBottomBar(), 90);
         return grid;
     }
 
@@ -132,7 +132,7 @@ public sealed partial class MainForm
     {
         var card = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(14, 10, 14, 10) }; var grid = Grid(1); card.Controls.Add(grid);
         var top = Columns(-1, 170);
-        var titles = Grid(1); AddRow(titles, TextLabel("Чат", 12, TextTone.Normal, true), 24); AddRow(titles, TextLabel("История хранится только на ПК участников · до 300 МБ", 8.5f, TextTone.Muted), 18);
+        var titles = Grid(1); AddRow(titles, TextLabel("Чат", 12, TextTone.Normal, true), 24); AddRow(titles, TextLabel("Пишите в любое время · история хранится только на ваших ПК, до 300 МБ", 8.5f, TextTone.Muted), 18);
         top.Controls.Add(titles, 0, 0);
         PrepareButton(olderMessages, "Показать раньше", UiIcon.Chevron, ButtonTone.Quiet); olderMessages.Font = UiTheme.Small; olderMessages.Visible = false; top.Controls.Add(olderMessages, 1, 0);
         AddRow(grid, top, 46); AddRow(grid, Space(), 6);
@@ -150,7 +150,7 @@ public sealed partial class MainForm
 
     private Control BuildBottomBar()
     {
-        var bar = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(8, 4, 8, 4), Elevation = 0.8f };
+        var bar = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(12, 6, 12, 6), Elevation = 0.8f, Radius = 20 };
         var row = Columns(350, 6, 140, 8, -1, 6, 54, 2, 54);
         modePicker.Options.Add(new("Обычный", "24 кбит/с", "Лучшее качество голоса"));
         modePicker.Options.Add(new("Игровой", "16 кбит/с", "Меньше нагрузки на сеть во время игры"));
@@ -289,7 +289,8 @@ public sealed class DividerLine : Control
             brush.InterpolationColors = new System.Drawing.Drawing2D.ColorBlend { Colors = [Color.FromArgb(0, color), color, color, Color.FromArgb(0, color)], Positions = [0f, 0.12f, 0.88f, 1f] };
             using var pen = new Pen(brush, 1); e.Graphics.DrawLine(pen, 0, y + offset, Width, y + offset);
         }
-        Line(Color.FromArgb(150, UiTheme.Blend(Backdrop.Behind(this), Color.Black, 0.55f)), 0);
-        Line(Color.FromArgb(60, 255, 255, 255), 1);
+        var dark = UiTheme.Current.Dark;
+        Line(dark ? Color.FromArgb(150, UiTheme.Blend(Backdrop.Behind(this), Color.Black, 0.55f)) : Color.FromArgb(90, 120, 132, 160), 0);
+        Line(Color.FromArgb(dark ? 60 : 255, 255, 255, 255), 1);
     }
 }

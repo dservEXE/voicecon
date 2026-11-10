@@ -21,7 +21,11 @@ public sealed class Settings
     public bool ShowOnlineStatus { get; set; } = true;
     public bool MessageSounds { get; set; } = true;
     public bool ShowMetrics { get; set; } = true;
+    /// <summary>Soft drifting colour pools on the window canvas.</summary>
+    public bool BackgroundGlow { get; set; } = true;
     public string LastConversation { get; set; } = "";
+    /// <summary>Newest delivery event already received, so offline messages are fetched once.</summary>
+    public long MailboxSince { get; set; }
     /// <summary>Screen sharing: optimized · quality · custom.</summary>
     public string ShareMode { get; set; } = "optimized";
     public int CustomFps { get; set; } = 60;

@@ -42,7 +42,10 @@ internal static class UiPaintChecks
                 parent.Controls.Remove(control);
             }
         }
-        using var form = new MainForm(true, "graphite"); Prepare(form); CheckBackgrounds(form);
+        using var form = new MainForm(true, "graphite"); Prepare(form); CheckBackgrounds(form); CheckCorners(form);
+        typeof(MainForm).GetMethod("ShowPreviewCall", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(form, []); typeof(MainForm).GetMethod("OpenSettings", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(form, []); Prepare(form); CheckCorners(form);
+        using (var share = new ShareDialog(new Settings { ShareMode = "custom" })) { Prepare(share); CheckCorners(share); }
+        using (var add = new AddFriendDialog("VCF1.test")) { Prepare(add); CheckCorners(add); }
         using var network = new NetworkDialog(new Settings()); Prepare(network); CheckBackgrounds(network);
         var on = UiSounds.CreatePcm(true); var off = UiSounds.CreatePcm(false);
         if (on.Length != 4960 || off.Length != on.Length || on.SequenceEqual(off)) throw new Exception("Microphone cues must have equal duration and distinct waveforms");
@@ -56,6 +59,26 @@ internal static class UiPaintChecks
             paintMethod.Invoke(control, [new PaintEventArgs(graphics, clip ?? control.ClientRectangle)]);
             using var stream = new MemoryStream(); bitmap.Save(stream, ImageFormat.Bmp);
             return Convert.ToHexString(SHA256.HashData(stream.ToArray()));
+        }
+        // Nothing may poke out of a card's rounded corner: a child there would paint flat face over the card's shadow.
+        static void CheckCorners(Control control)
+        {
+            if (control is SurfacePanel { Width: > 20, Height: > 20 } card && (card.Recessed || card.Elevation > 0))
+            {
+                var g = card.GutterPixels; var shape = new RectangleF(g, g, card.Width - 2 * g, card.Height - 2 * g);
+                var r = Math.Min(card.Radius * card.DeviceDpi / 96f, Math.Min(shape.Width, shape.Height) / 2);
+                foreach (Control child in card.Controls)
+                {
+                    if (!child.Visible && child.Tag is not true || child.Width < 2 || child.Height < 2) continue;
+                    foreach (var p in new[] { new PointF(child.Left + 0.5f, child.Top + 0.5f), new PointF(child.Right - 0.5f, child.Top + 0.5f), new PointF(child.Left + 0.5f, child.Bottom - 0.5f), new PointF(child.Right - 0.5f, child.Bottom - 0.5f) })
+                    {
+                        var cx = Math.Clamp(p.X, shape.Left + r, shape.Right - r); var cy = Math.Clamp(p.Y, shape.Top + r, shape.Bottom - r);
+                        var dx = p.X - cx; var dy = p.Y - cy;
+                        if (dx * dx + dy * dy > r * r + 0.5f || !shape.Contains(p)) throw new Exception($"{child.GetType().Name} pokes out of the rounded corner of a card ({card.Parent?.GetType().Name}, {card.Size})");
+                    }
+                }
+            }
+            foreach (Control child in control.Controls) CheckCorners(child);
         }
         static void CheckBackgrounds(Control control)
         {
@@ -104,6 +127,15 @@ internal static class UiPaintChecks
             }
             Application.DoEvents(); form.Refresh();
         }
+        var drift = new List<double>();
+        var upscale = new List<double>(); using var probe = new Bitmap(4, 4); using var probeGraphics = Graphics.FromImage(probe);
+        for (var i = 0; i < 30; i++)
+        {
+            var c = Stopwatch.StartNew(); Backdrop.Phase += 0.5; Backdrop.Paint(probeGraphics, form, new Rectangle(0, 0, 2, 2)); upscale.Add(c.Elapsed.TotalMilliseconds);
+            Backdrop.InvalidateCanvas(form); RedrawWindow(form.Handle, IntPtr.Zero, IntPtr.Zero, 0x0100 | 0x0080); drift.Add(c.Elapsed.TotalMilliseconds);
+        }
+        upscale.Sort(); Console.WriteLine($"of which pools + upscale: median {upscale[15]:F2} ms");
+        drift.Sort(); Console.WriteLine($"DRIFT canvas step: median {drift[15]:F2} ms, max {drift[^1]:F2} ms at 2 steps/s (window active only)");
         form.Hide(); intervals.Sort();
         Console.WriteLine($"MOTION settings slide: {intervals.Count} frames over 4 slides, median interval {intervals[intervals.Count / 2]:F2} ms, p95 {intervals[(int)(intervals.Count * 0.95)]:F2} ms, max {intervals[^1]:F2} ms; snapshot before slide {string.Join(" / ", starts.Select(v => v.ToString("F0")))} ms");
     }

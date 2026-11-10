@@ -18,6 +18,13 @@ internal static class FeatureChecks
         Require(a.Open(sealedMessage) is null, "Wrong recipient must fail authentication");
         Require(b.Open(a.Seal(bob, new CallSignal("offer", id, DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 120))) is null, "Expired invitation");
         Require(b.Open(a.Seal(bob, new CallSignal("offer", id, long.MinValue))) is null, "Malformed timestamp");
+        // Offline chat: a full-length Cyrillic message fits the delivery limit, may wait up to 12 hours, and older ones are dropped.
+        var letter = string.Concat(Enumerable.Repeat("Привет, заходи вечером! ", 60))[..ContactBook.OfflineMessageLimit];
+        var mail = a.Seal(bob, CallSignal.Create("msg", id, letter)); Require(System.Text.Encoding.UTF8.GetByteCount(mail) < 4000, "Offline message fits the delivery limit");
+        Require(b.Open(mail)?.Signal.Code == letter, "Offline message round trip");
+        Require(b.Open(a.Seal(bob, new CallSignal("msg", id, DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 10 * 3600, "ждёт"))) is not null, "Waiting message accepted");
+        Require(b.Open(a.Seal(bob, new CallSignal("msg", id, DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 14 * 3600, "старое"))) is null, "Stale message dropped");
+        Require(b.Open(a.Seal(bob, new CallSignal("msg", id, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), "ab"))) ?.Signal.Code == "ab", "Control characters stripped");
         using (var reload = new ContactBook(profiles.First)) Require(reload.Id == a.Id && reload.Friends.Count == 1, "DPAPI identity and contact persistence");
         using var bitmap = new Bitmap(1920, 1080); using (var graphics = Graphics.FromImage(bitmap)) { graphics.Clear(Color.CornflowerBlue); graphics.FillRectangle(Brushes.Gold, 300, 100, 500, 300); }
         var packet = VideoCodec.Encode(bitmap, 2, 123, 1280, 720); using var decoded = VideoCodec.Decode(packet);
@@ -38,7 +45,16 @@ internal static class FeatureChecks
         while (!first.Connected || !second.Connected) { if (DateTime.UtcNow > until) throw new TimeoutException("Public ntfy websocket could not connect"); await Task.Delay(100); }
         await first.SendAsync(bob, CallSignal.Create("offer", Guid.NewGuid().ToString("N"), "synthetic-encrypted-delivery-check"));
         var received = await completion.Task.WaitAsync(TimeSpan.FromSeconds(15)); Require(received == "synthetic-encrypted-delivery-check", "Public delivery");
-        Console.WriteLine("PASS public ntfy: two synthetic encrypted identities, websocket subscription and encrypted invitation delivery; cache disabled; no user contacts, device capture or audio used");
+        // Offline chat: the message is posted while the recipient is not listening and arrives when it connects.
+        var waiting = CallSignal.Create("msg", Guid.NewGuid().ToString("N"), "Синтетическое сообщение, пока друг не в сети");
+        var since = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 5;
+        await first.SendAsync(bob, waiting, keep: true);
+        using var later = new CallMailbox(b, bob) { Since = since };
+        var offline = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        later.Received += (_, signal) => { if (signal.Kind == "msg") offline.TrySetResult(signal.Code ?? ""); };
+        await Task.Delay(1500); later.Start();
+        Require(await offline.Task.WaitAsync(TimeSpan.FromSeconds(25)) == waiting.Code, "Offline message delivered after the recipient connects");
+        Console.WriteLine("PASS public ntfy: two synthetic encrypted identities, websocket subscription and encrypted invitation delivery (not cached); encrypted offline chat message held by the service and delivered on connect; no user contacts, device capture or audio used");
     }
     public static async Task CheckCallFlow()
     {

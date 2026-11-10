@@ -4,7 +4,7 @@ using System.Drawing.Drawing2D;
 namespace Voicecon;
 
 public enum ContactKind { Group, Friend }
-public sealed record ContactEntry(ContactKind Kind, string Id, string Name, string Subtitle, PresenceStatus Status, bool Active = false)
+public sealed record ContactEntry(ContactKind Kind, string Id, string Name, string Subtitle, PresenceStatus Status, bool Active = false, bool Unread = false)
 {
     public string Key => (Kind == ContactKind.Group ? "g:" : "f:") + Id;
 }
@@ -13,7 +13,7 @@ public sealed record ContactEntry(ContactKind Kind, string Id, string Name, stri
 public sealed class ContactListView : Control
 {
     private abstract record Row(float Height);
-    private sealed record Header(string Text, bool CanAdd) : Row(32);
+    private sealed record Header(string Text, bool CanAdd) : Row(38);
     private sealed record Item(ContactEntry Entry) : Row(60);
     private sealed record Empty(string Text) : Row(54);
     private readonly List<Row> rows = [];
@@ -21,6 +21,7 @@ public sealed class ContactListView : Control
     private float hoverAmount, selectionY = -1, selectionTarget = -1;
     private readonly object hoverTrack = new(), selectTrack = new();
     private Rectangle addGroupBounds;
+    private bool addHot;
     public string? SelectedKey { get; private set; }
     public event Action<ContactEntry>? SelectionChanged;
     public event Action<ContactEntry>? EntryActivated;
@@ -67,11 +68,12 @@ public sealed class ContactListView : Control
     protected override void OnMouseMove(MouseEventArgs e)
     {
         var hit = HitRow(e.Location); if (hit >= 0 && rows[hit] is not Item) hit = -1;
-        Cursor = hit >= 0 || addGroupBounds.Contains(e.Location) ? Cursors.Hand : Cursors.Default;
+        var overAdd = addGroupBounds.Contains(e.Location); if (overAdd != addHot) { addHot = overAdd; Invalidate(addGroupBounds); }
+        Cursor = hit >= 0 || overAdd ? Cursors.Hand : Cursors.Default;
         if (hit != hovered) { hovered = hit; UiMotion.Run(hoverTrack, this, 140, p => { hoverAmount = p; Invalidate(); }); }
         base.OnMouseMove(e);
     }
-    protected override void OnMouseLeave(EventArgs e) { hovered = -1; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseLeave(EventArgs e) { hovered = -1; addHot = false; Invalidate(); base.OnMouseLeave(e); }
     protected override void OnMouseDown(MouseEventArgs e)
     {
         Focus();
@@ -116,13 +118,28 @@ public sealed class ContactListView : Control
                 switch (row)
                 {
                     case Header header:
-                        TextRenderer.DrawText(g, header.Text, UiTheme.Caption, new Rectangle((int)(10 * s), (int)(y + 8 * s), Width - (int)(50 * s), (int)(20 * s)), t.Muted, flags);
+                    {
+                        // Section header: accent glyph, brighter caption, an engraved line, and (for groups) a raised + button.
+                        var mid = y + 18 * s;
+                        UiIcons.Draw(g, header.CanAdd ? UiIcon.Group : UiIcon.Person, new RectangleF(10 * s, mid - 7 * s, 14 * s, 14 * s), t.Accent);
+                        var label = UiTheme.Blend(t.Muted, t.Text, 0.55f);
+                        var captionWidth = TextRenderer.MeasureText(header.Text, UiTheme.Caption, Size.Empty, TextFormatFlags.NoPadding).Width;
+                        TextRenderer.DrawText(g, header.Text, UiTheme.Caption, new Rectangle((int)(30 * s), (int)(mid - 10 * s), Width - (int)(76 * s), (int)(20 * s)), label, flags);
+                        var lineEnd = header.CanAdd ? Width - 46 * s : Width - 12 * s; var lineStart = 30 * s + captionWidth + 10 * s;
+                        if (lineEnd > lineStart + 8 * s)
+                        {
+                            using var groove = new Pen(t.Dark ? Color.FromArgb(120, 0, 0, 0) : Color.FromArgb(80, 120, 132, 160)); g.DrawLine(groove, lineStart, mid, lineEnd, mid);
+                            using var lip = new Pen(Color.FromArgb(t.Dark ? 34 : 255, 255, 255, 255)); g.DrawLine(lip, lineStart, mid + 1, lineEnd, mid + 1);
+                        }
                         if (header.CanAdd)
                         {
-                            addGroupBounds = new Rectangle(Width - (int)(34 * s), (int)(y + 5 * s), (int)(26 * s), (int)(24 * s));
-                            var hot = addGroupBounds.Contains(PointToClient(Cursor.Position));
-                            UiIcons.Draw(g, UiIcon.Plus, new RectangleF(addGroupBounds.X + 7 * s, addGroupBounds.Y + 6 * s, 12 * s, 12 * s), hot ? t.Accent : t.Muted);
+                            addGroupBounds = new Rectangle(Width - (int)(40 * s), (int)(mid - 13 * s), (int)(26 * s), (int)(26 * s));
+                            var circle = new RectangleF(addGroupBounds.X, addGroupBounds.Y, addGroupBounds.Width, addGroupBounds.Height);
+                            if (addHot) Neu.Raised(g, circle, circle.Width / 2, s, Neu.SmallDepth, t.Accent, convex: 1, rim: 1.3f);
+                            else Neu.Raised(g, circle, circle.Width / 2, s, Neu.SmallDepth, t.Surface, convex: 0.6f);
+                            UiIcons.Draw(g, UiIcon.Plus, RectangleF.Inflate(circle, -7.5f * s, -7.5f * s), addHot ? t.AccentInk : t.Accent);
                         }
+                    }
                         break;
                     case Empty empty:
                         TextRenderer.DrawText(g, empty.Text, UiTheme.Small, new Rectangle((int)(12 * s), (int)y, Width - (int)(20 * s), (int)h), UiTheme.WithAlpha(t.Muted, 200), flags | TextFormatFlags.WordBreak);
@@ -142,9 +159,9 @@ public sealed class ContactListView : Control
                         var textLeft = (int)(avatar.Right + 12 * s); var textWidth = Width - textLeft - (int)(12 * s);
                         var nameColor = entry.Key == SelectedKey ? t.Text : UiTheme.Blend(t.Text, t.Muted, 0.15f);
                         TextRenderer.DrawText(g, entry.Name, UiTheme.Strong, new Rectangle(textLeft, (int)(rect.Y + 8 * s), textWidth, (int)(20 * s)), nameColor, flags);
-                        var subtitleColor = entry.Active ? t.Accent : entry.Status == PresenceStatus.Online ? UiTheme.Blend(t.Online, t.Muted, 0.35f) : t.Muted;
-                        TextRenderer.DrawText(g, entry.Subtitle, UiTheme.Small, new Rectangle(textLeft, (int)(rect.Y + 28 * s), textWidth, (int)(18 * s)), subtitleColor, flags);
-                        if (entry.Active)
+                        var subtitleColor = entry.Active || entry.Unread ? t.Accent : entry.Status == PresenceStatus.Online ? UiTheme.Blend(t.Online, t.Muted, 0.35f) : t.Muted;
+                        TextRenderer.DrawText(g, entry.Unread && !entry.Active ? "новое сообщение" : entry.Subtitle, UiTheme.Small, new Rectangle(textLeft, (int)(rect.Y + 28 * s), textWidth, (int)(18 * s)), subtitleColor, flags);
+                        if (entry.Active || entry.Unread)
                         {
                             using var live = new SolidBrush(t.Accent); g.FillEllipse(live, rect.Right - 18 * s, rect.Y + rect.Height / 2 - 4 * s, 8 * s, 8 * s);
                         }

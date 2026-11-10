@@ -11,26 +11,118 @@ public interface ISurface
 }
 
 /// <summary>
-/// The window canvas is one flat colour (neumorphism needs a matte surface). Every control paints the face of the nearest
-/// <see cref="ISurface"/> ancestor, so backgrounds never depend on position: moving a panel only copies pixels, which keeps
-/// slides and scrolls cheap and free of trails.
+/// The window canvas: a matte base with very soft, deep pools of colour (violet, pink, red, blue, teal) that drift slowly.
+/// Cards and controls on them have flat faces, so the colour shows only in the gaps and shadows around the cards.
+/// The pools are a tiny low-resolution image scaled up while painting; nothing is cached per window size, and the drift
+/// repaints only the canvas gaps a few times a second while the window is active.
 /// </summary>
 public static class Backdrop
 {
+    private static readonly ImageAttributes clamp = CreateClamp();
+    private static ImageAttributes CreateClamp() { var a = new ImageAttributes(); a.SetWrapMode(WrapMode.TileFlipXY); return a; }
+    private static Bitmap? pools;
+    private static string poolsKey = "";
+    /// <summary>Show the colour pools (user setting).</summary>
+    public static bool Glow { get; set; } = true;
+    /// <summary>Drift clock in seconds; advanced by the window while it is active.</summary>
+    public static double Phase { get; set; }
+
     public static Color Behind(Control control)
     {
         for (var current = control.Parent; current is not null; current = current.Parent)
             if (current is ISurface surface) return surface.Face;
         return UiTheme.Current.Background;
     }
+    /// <summary>True when the control sits directly on the window canvas (no card between it and the window).</summary>
+    public static bool OnCanvas(Control control)
+    {
+        for (var current = control.Parent; current is not null; current = current.Parent) if (current is ISurface) return false;
+        return true;
+    }
     public static void Paint(Graphics graphics, Control control, Rectangle area)
     {
-        using var fill = new SolidBrush(Behind(control)); graphics.FillRectangle(fill, area);
+        if (!OnCanvas(control) || !Glow) { using var fill = new SolidBrush(Behind(control)); graphics.FillRectangle(fill, area); return; }
+        // Position of the control inside its window: every control samples the same window-wide image, so there are no seams.
+        Form? form = null; var x = 0; var y = 0;
+        for (var current = control; current is not null; current = current.Parent)
+        {
+            if (current is Form f) { form = f; break; }
+            x += current.Left; y += current.Top;
+        }
+        if (form is null || form.ClientSize.Width < 8 || form.ClientSize.Height < 8) { using var fill = new SolidBrush(UiTheme.Current.Background); graphics.FillRectangle(fill, area); return; }
+        // The canvas is kept at half resolution (a soft gradient loses nothing); each pixel covers a 2×2 block.
+        var image = CanvasFor(form);
+        int left = (area.X + x) / 2, top = (area.Y + y) / 2, right = (area.Right + x + 1) / 2, bottom = (area.Bottom + y + 1) / 2;
+        var source = Rectangle.FromLTRB(Math.Max(0, left), Math.Max(0, top), Math.Min(image.Width, right), Math.Min(image.Height, bottom));
+        if (source.Width <= 0 || source.Height <= 0) return;
+        var state = graphics.Save();
+        graphics.SetClip(area, CombineMode.Intersect);
+        graphics.InterpolationMode = InterpolationMode.NearestNeighbor; graphics.PixelOffsetMode = PixelOffsetMode.Half; graphics.CompositingMode = CompositingMode.SourceCopy;
+        graphics.DrawImage(image, new Rectangle(source.X * 2 - x, source.Y * 2 - y, source.Width * 2, source.Height * 2), source, GraphicsUnit.Pixel);
+        graphics.Restore(state);
     }
     /// <summary>Opaque colour behind a control, for native children (text boxes, labels) that need a BackColor.</summary>
     public static Color Approximate(Control control) => control is ISurface surface ? surface.Face : Behind(control);
-    /// <summary>Kept for theme switches: there is nothing cached per window any more.</summary>
     public static void Invalidate(Form form) { }
+
+    /// <summary>Repaints only what shows the canvas: gaps of containers on it and the shadow rings of cards.</summary>
+    public static void InvalidateCanvas(Control root)
+    {
+        if (!Glow || !root.Visible && root is not Form) return;
+        if (root is SurfacePanel card) { card.InvalidateGutter(); return; }
+        if (root is ISurface) return;
+        root.Invalidate(false);
+        foreach (Control child in root.Controls) if (child.Visible) InvalidateCanvas(child);
+    }
+
+    private static readonly (Color Color, double Speed, double Phase, double Radius)[] Colors =
+    [
+        (Color.FromArgb(124, 77, 255), 1 / 70.0, 0.0, 0.55),   // violet
+        (Color.FromArgb(255, 79, 163), 1 / 85.0, 2.1, 0.48),   // pink
+        (Color.FromArgb(255, 69, 84), 1 / 97.0, 4.0, 0.42),    // red
+        (Color.FromArgb(63, 107, 255), 1 / 78.0, 5.3, 0.52),   // blue
+        (Color.FromArgb(37, 194, 176), 1 / 110.0, 1.2, 0.40),  // teal
+    ];
+    private sealed class CanvasImage { public Bitmap? Image; public string Key = ""; }
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Form, CanvasImage> canvases = new();
+    /// <summary>The pools scaled up to the window once per drift step; controls then copy their slice unscaled.</summary>
+    private static Bitmap CanvasFor(Form form)
+    {
+        var small = Pools(); var size = new Size((form.ClientSize.Width + 1) / 2, (form.ClientSize.Height + 1) / 2); var entry = canvases.GetOrCreateValue(form);
+        var key = poolsKey + ":" + size.Width + "x" + size.Height;
+        if (entry.Image is not null && entry.Key == key) return entry.Image;
+        if (entry.Image is null || entry.Image.Size != size) { entry.Image?.Dispose(); entry.Image = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppPArgb); }
+        using (var g = Graphics.FromImage(entry.Image))
+        {
+            g.CompositingMode = CompositingMode.SourceCopy; g.InterpolationMode = InterpolationMode.Bilinear; g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(small, new Rectangle(Point.Empty, size), 0, 0, small.Width, small.Height, GraphicsUnit.Pixel, clamp);
+        }
+        entry.Key = key; return entry.Image;
+    }
+    private static Bitmap Pools()
+    {
+        var t = UiTheme.Current; var step = (int)Math.Floor(Phase * 2);
+        var key = $"{t.Background.ToArgb()}:{t.Dark}:{step}";
+        if (pools is not null && poolsKey == key) return pools;
+        const int width = 64, height = 42;
+        var image = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
+        using (var g = Graphics.FromImage(image))
+        {
+            g.Clear(t.Background); g.SmoothingMode = SmoothingMode.AntiAlias;
+            var time = step / 2.0; var strength = t.Dark ? 46 : 60;
+            foreach (var (color, speed, phase, radius) in Colors)
+            {
+                var angle = time * speed * Math.PI + phase;
+                var cx = width * (0.5 + 0.46 * Math.Sin(angle)); var cy = height * (0.5 + 0.44 * Math.Cos(angle * 0.83 + phase));
+                var r = (float)(Math.Max(width, height) * radius); var rect = new RectangleF((float)cx - r, (float)cy - r, r * 2, r * 2);
+                using var path = new GraphicsPath(); path.AddEllipse(rect);
+                using var brush = new PathGradientBrush(path) { CenterColor = Color.FromArgb(strength, color), SurroundColors = [Color.FromArgb(0, color)] };
+                brush.Blend = new Blend { Factors = [0f, 0.35f, 0.75f, 1f], Positions = [0f, 0.45f, 0.8f, 1f] };
+                g.FillEllipse(brush, rect);
+            }
+        }
+        pools?.Dispose(); pools = image; poolsKey = key; return image;
+    }
 }
 
 /// <summary>

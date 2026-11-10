@@ -27,6 +27,8 @@ public sealed partial class MainForm : Form
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 1000 };
     private readonly System.Windows.Forms.Timer settingsTimer = new() { Interval = 350 };
     private readonly System.Windows.Forms.Timer contactsTimer = new() { Interval = 250 };
+    /// <summary>Drifts the canvas colours twice a second, only while the window is active and animations are full.</summary>
+    private readonly System.Windows.Forms.Timer driftTimer = new() { Interval = 500 };
     private readonly Process process = Process.GetCurrentProcess();
     private DateTime lastSample = DateTime.UtcNow;
     private TimeSpan lastCpu;
@@ -36,6 +38,7 @@ public sealed partial class MainForm : Form
     private PendingCall? incomingCall;
     private readonly Dictionary<string, OutgoingCall> outgoingCalls = [];
     private readonly List<VoiceRoom.ChatLine> chatHistory = [];
+    private readonly HashSet<string> unread = [];
     private Keys[] registeredKeys = [];
     private readonly object themeTrack = new();
     private Conversation? selected, active;
@@ -50,6 +53,7 @@ public sealed partial class MainForm : Form
         this.previewMode = previewMode; this.startInTray = startInTray; windowRequested = !startInTray;
         if (!previewMode) settings.StartWithWindows = StartupManager.IsEnabled();
         UiTheme.Select(previewTheme ?? settings.Theme); UiMotion.Level = previewMode ? MotionLevel.Off : UiMotion.Parse(settings.AnimationLevel);
+        Backdrop.Glow = previewMode || settings.BackgroundGlow; Backdrop.Phase = previewMode ? 30 : DateTime.Now.TimeOfDay.TotalSeconds;
         BuildLayout(); ApplyTheme();
         if (previewMode)
         {
@@ -60,7 +64,14 @@ public sealed partial class MainForm : Form
         timer.Tick += (_, _) => { UpdateStats(); CheckCalls(); ScheduleUpdateCheck(); }; timer.Start();
         settingsTimer.Tick += (_, _) => { settingsTimer.Stop(); PersistSettings(); };
         contactsTimer.Tick += (_, _) => { contactsTimer.Stop(); RefreshContacts(); RefreshControls(); };
-        Deactivate += (_, _) => UiMotion.FinishAll();
+        Deactivate += (_, _) => { UiMotion.FinishAll(); driftTimer.Stop(); };
+        Activated += (_, _) => UpdateDrift();
+        driftTimer.Tick += (_, _) =>
+        {
+            if (!CanDrift) { driftTimer.Stop(); return; }
+            if (slide.Active) return;
+            Backdrop.Phase += driftTimer.Interval / 1000.0; Backdrop.InvalidateCanvas(this);
+        };
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
     }
 
@@ -166,6 +177,8 @@ public sealed partial class MainForm : Form
         mailbox?.Dispose(); mailbox = new CallMailbox(contacts, contacts.OwnCard(settings.Name, settings.SignalingServer));
         var current = mailbox;
         mailbox.ConnectivityChanged += ready => Dispatch(() => { if (mailbox == current) SetDelivery(ready ? "В сети · входящие доступны" : "Нет связи с сервисом доставки", ready); });
+        mailbox.Since = settings.MailboxSince;
+        mailbox.SinceChanged += since => Dispatch(() => { if (since > settings.MailboxSince) { settings.MailboxSince = since; SaveSettings(); } });
         mailbox.Received += (friend, signal) => Dispatch(async () =>
         {
             if (mailbox != current) return;
@@ -212,12 +225,12 @@ public sealed partial class MainForm : Form
             var online = g.Members.Count(m => PresenceOf(m).Status is PresenceStatus.Online or PresenceStatus.InCall);
             var count = g.Members.Length + 1;
             var subtitle = activeKey == "g:" + g.Id ? "идёт звонок" : $"{count} {Plural(count, "участник", "участника", "участников")}" + (online > 0 ? $" · {online} в сети" : "");
-            return new ContactEntry(ContactKind.Group, g.Id, g.Name, subtitle, PresenceStatus.Unknown, activeKey == "g:" + g.Id);
+            return new ContactEntry(ContactKind.Group, g.Id, g.Name, subtitle, PresenceStatus.Unknown, activeKey == "g:" + g.Id, unread.Contains("g:" + g.Id));
         }).ToList();
         var friendEntries = (contacts?.Friends ?? []).Select(f =>
         {
             var info = PresenceOf(f.Id); var inCall = activeKey == "f:" + f.Id || room is { IsDisposed: false } r && r.People.Any(p => p.Name == f.Name && p.Connected) && activeKey is not null;
-            return new ContactEntry(ContactKind.Friend, f.Id, f.Name, inCall ? "в звонке с вами" : Describe(info), info.Status, inCall);
+            return new ContactEntry(ContactKind.Friend, f.Id, f.Name, inCall ? "в звонке с вами" : Describe(info), info.Status, inCall, unread.Contains("f:" + f.Id));
         }).OrderByDescending(e => e.Status is PresenceStatus.Online or PresenceStatus.InCall).ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
         var wanted = selected?.Key ?? (settings.LastConversation.Length > 0 ? settings.LastConversation : null);
         contactList.SetEntries(groupEntries, friendEntries, wanted);
@@ -236,6 +249,7 @@ public sealed partial class MainForm : Form
         var conversation = new Conversation(entry.Key, entry.Kind, entry.Id, entry.Name);
         if (selected?.Key == conversation.Key) { selected = conversation; UpdateHeader(); RefreshControls(); return; }
         selected = conversation; historyLimit = 300;
+        if (unread.Remove(conversation.Key)) RefreshContacts();
         if (!previewMode && settings.LastConversation != entry.Key) { settings.LastConversation = entry.Key; if (entry.Kind == ContactKind.Friend) settings.LastFriendId = entry.Id; SaveSettings(); }
         LoadHistory(); UpdateHeader(); RefreshControls();
     }
@@ -327,6 +341,7 @@ public sealed partial class MainForm : Form
 
     private async Task OnSignal(FriendCard friend, CallSignal signal)
     {
+        if (signal.Kind == "msg") { ReceiveMessage(friend, signal); return; }
         if (signal.Kind == "offer")
         {
             if (signal.Code is null) return; InviteCode.Decode(signal.Code);
@@ -504,10 +519,57 @@ public sealed partial class MainForm : Form
     {
         try
         {
-            if (room?.CanChat != true || selected?.Key != active?.Key) throw new InvalidOperationException("Чат доступен во время звонка с этим собеседником.");
-            room.SendChat(chatInput.Text); chatInput.Clear();
+            if (chatInput.Text.Trim().Length == 0) return;
+            // In a call with this conversation the message goes straight to the peers; otherwise through the encrypted mailbox.
+            if (room?.CanChat == true && selected?.Key == active?.Key) { room.SendChat(chatInput.Text); chatInput.Clear(); return; }
+            var recipients = MessageRecipients(selected);
+            if (selected is null || recipients.Count == 0) throw new InvalidOperationException("Выберите друга или группу, чтобы написать.");
+            if (mailbox is null) throw new InvalidOperationException("Нет связи с сервисом доставки — сообщение не отправлено.");
+            var text = chatInput.Text.Trim().Replace("\r\n", "\n"); chatInput.Clear();
+            var conversation = selected; var group = conversation.Kind == ContactKind.Group ? groups?.Find(conversation.Id) : null;
+            for (var start = 0; start < text.Length; start += ContactBook.OfflineMessageLimit)
+            {
+                var part = text.Substring(start, Math.Min(ContactBook.OfflineMessageLimit, text.Length - start));
+                var id = Guid.NewGuid().ToString("N"); var record = new ChatRecord(id, settings.Name, part, true, DateTimeOffset.Now);
+                StoreMessage(conversation.Key, record);
+                var signal = CallSignal.Create("msg", id, part, group?.Id, group?.Name);
+                _ = DeliverAsync(recipients, signal);
+            }
         }
         catch (Exception ex) { SetHint(ex.Message); }
+    }
+    private List<FriendCard> MessageRecipients(Conversation? conversation)
+    {
+        if (conversation is null || contacts is null) return [];
+        if (conversation.Kind == ContactKind.Friend) return contacts.Friends.Where(f => f.Id == conversation.Id).ToList();
+        var group = groups?.Find(conversation.Id); return group is null ? [] : contacts.Friends.Where(f => group.Members.Contains(f.Id)).ToList();
+    }
+    private async Task DeliverAsync(IReadOnlyList<FriendCard> recipients, CallSignal signal)
+    {
+        foreach (var friend in recipients)
+        {
+            try { await mailbox!.SendAsync(friend, signal, keep: true); }
+            catch (Exception ex) { AppLog.Error("Сообщение не доставлено", ex); if (!IsDisposed) SetHint($"Сообщение для {friend.Name} не доставлено: {ex.Message}"); }
+        }
+    }
+    /// <summary>A chat message that arrived through the mailbox (the friend wrote while there was no call).</summary>
+    private void ReceiveMessage(FriendCard friend, CallSignal signal)
+    {
+        if (signal.Code is not { Length: > 0 } text) return;
+        var key = "f:" + friend.Id;
+        if (signal.Group is { } groupId && groups is not null) key = ConversationForGroup(groups.Find(groupId) ?? groups.Upsert(groupId, signal.Title ?? "Группа", [friend.Id])).Key;
+        if (chats?.LoadRecent(key, 400).Any(r => r.Id == signal.Id) == true) return;
+        var record = new ChatRecord(signal.Id, friend.Name, text, false, DateTimeOffset.FromUnixTimeSeconds(signal.Time).ToLocalTime());
+        StoreMessage(key, record);
+        if (selected?.Key != key || !ContainsFocus) { if (selected?.Key != key) unread.Add(key); RefreshContacts(); }
+        if (settings.MessageSounds) Cue(NotificationCue.Message);
+        if (!Visible || WindowState == FormWindowState.Minimized) tray?.ShowBalloonTip(5000, "Сообщение от " + friend.Name, text.Length > 120 ? text[..120] + "…" : text, ToolTipIcon.None);
+    }
+    private void StoreMessage(string key, ChatRecord record)
+    {
+        try { chats?.Append(key, record); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AppLog.Error("Не удалось сохранить сообщение", ex); }
+        if (selected?.Key == key) { chatView.Add(record); ScrollChatToEnd(); }
     }
     private void LoadHistory()
     {
@@ -518,7 +580,7 @@ public sealed partial class MainForm : Form
         UpdateChatEmpty(); chatView.SetRecords(records); ScrollChatToEnd();
     }
     private void UpdateChatEmpty() => chatView.EmptyText = selected is null ? "Добавьте друга кнопкой + слева — и здесь появится ваша переписка."
-        : $"Здесь будет история переписки с «{selected.Title}».\nСообщения хранятся только на ваших ПК и доступны во время звонка.";
+        : $"Здесь будет история переписки с «{selected.Title}».\nПишите в любое время: если собеседник не в сети, сообщение подождёт его до 12 часов. Хранится только на ваших ПК.";
     private void ScrollChatToEnd() => chatHost.ScrollToEnd();
     private void OpenEmoji()
     {
@@ -606,9 +668,12 @@ public sealed partial class MainForm : Form
         SetShown(shareButton, connected);
         shareButton.Text = sharing ? "Остановить показ" : "Демо / камера"; shareButton.Tone = sharing ? ButtonTone.Live : ButtonTone.Secondary; shareButton.Glyph = sharing ? UiIcon.Stop : UiIcon.Screen;
         SetShown(inviteButton, started && room!.IsHost && room.CanInvite && contacts is { Friends.Count: > 0 });
-        var canChat = room?.CanChat == true && here;
-        chatInput.Enabled = sendChat.Enabled = emoji.Enabled = canChat;
-        chatInput.PlaceholderText = canChat ? "Сообщение… (Enter — отправить, Shift+Enter — новая строка)" : started && !here ? "Вы в звонке с другой беседой — выберите её слева" : "Чат доступен во время звонка";
+        var live = room?.CanChat == true && here;
+        var canWrite = live || selected is not null && (previewMode || mailbox is not null && MessageRecipients(selected).Count > 0);
+        chatInput.Enabled = sendChat.Enabled = emoji.Enabled = canWrite;
+        chatInput.PlaceholderText = live ? "Сообщение… (Enter — отправить, Shift+Enter — новая строка)"
+            : canWrite ? "Сообщение… дойдёт, даже если собеседник сейчас не в сети (до 12 ч)"
+            : selected is null ? "Выберите друга или группу, чтобы написать" : "Нет связи с сервисом доставки";
         acceptCall.Enabled = rejectCall.Enabled = !busy;
         if (incomingRow is not null) incomingRow.Height = incomingCall is null ? 0 : 108 * DeviceDpi / 96f;
         incomingPanel.Visible = incomingCall is not null;
@@ -730,6 +795,8 @@ public sealed partial class MainForm : Form
         RegisterShortcuts(); BeginInvoke(new Action(() => { InitializeContacts(); ScheduleUpdateCheck(); }));
     }
     protected override void OnPaintBackground(PaintEventArgs e) => Backdrop.Paint(e.Graphics, this, ClientRectangle);
+    private bool CanDrift => Backdrop.Glow && UiMotion.Level == MotionLevel.Full && Visible && WindowState != FormWindowState.Minimized && ContainsFocus;
+    private void UpdateDrift() { if (CanDrift) driftTimer.Start(); else driftTimer.Stop(); }
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e); if (previewMode) return;

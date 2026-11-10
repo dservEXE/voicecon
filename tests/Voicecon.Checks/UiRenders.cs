@@ -51,6 +51,13 @@ internal static class UiRenders
             foreach (var icon in Enum.GetValues<UiIcon>().Skip(1)) { UiIcons.Draw(g, icon, new RectangleF(x, 8, 24, 24), UiTheme.Current.Text); x += 27; }
         }
         glyphs.Save(Path.Combine(directory, "icons.png"), ImageFormat.Png);
+        using (var brand = new Bitmap(560, 280))
+        using (var g = Graphics.FromImage(brand))
+        {
+            g.Clear(UiTheme.Current.Background); BrandArt.Draw(g, new RectangleF(12, 12, 256, 256));
+            foreach (var (size, x) in new[] { (64, 300), (32, 390), (24, 450), (16, 500) }) BrandArt.Draw(g, new RectangleF(x, 200, size, size));
+            brand.Save(Path.Combine(directory, "brand.png"), ImageFormat.Png);
+        }
         Console.WriteLine("Offscreen renders saved: " + directory);
     }
     private static void Save(Control control, string path)

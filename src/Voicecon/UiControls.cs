@@ -35,6 +35,16 @@ public sealed class SurfacePanel : Panel, ISurface
         BackColor = UiTheme.Current.Surface; Margin = Padding.Empty;
     }
     private float S => DeviceDpi / 96f;
+    /// <summary>Repaints only the shadow ring and the corners outside the shape (where the canvas shows through).</summary>
+    public void InvalidateGutter()
+    {
+        if (Recessed || !IsHandleCreated) return;
+        var g = GutterPixels; var radius = (int)Math.Ceiling(Math.Min(Radius * S, Math.Min(Width - 2 * g, Height - 2 * g) / 2f));
+        using var ring = new Region(ClientRectangle);
+        ring.Exclude(new Rectangle(g + radius, g, Width - 2 * (g + radius), Height - 2 * g));
+        ring.Exclude(new Rectangle(g, g + radius, Width - 2 * g, Height - 2 * (g + radius)));
+        Invalidate(ring, false);
+    }
     public int GutterPixels => Recessed ? 0 : Gutter >= 0 ? (int)Math.Round(Gutter * S) : Neu.Extent(Elevation, S);
     public override Rectangle DisplayRectangle
     {
@@ -181,9 +191,48 @@ public sealed class SegmentedPicker : Control
         return new RectangleF(inner.X + (position < 0 ? index : position) * w, inner.Y, w, inner.Height);
     }
     private int HitTest(Point point) { for (var i = 0; i < Options.Count; i++) if (Segment(i).Contains(point)) return i; return -1; }
-    protected override void OnMouseMove(MouseEventArgs e) { var hit = HitTest(e.Location); if (hit != (int)hover) { hover = hit; Invalidate(); } base.OnMouseMove(e); }
+    private bool pressed, dragging; private int downX; private float grab;
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        if (pressed && (dragging || Math.Abs(e.X - downX) > 3 * S))
+        {
+            // The capsule follows the pointer; the choice is made where it is let go.
+            dragging = true; UiMotion.Cancel(track);
+            var first = Segment(0); thumb = Math.Clamp((e.X - grab - first.X) / Math.Max(1, first.Width), 0, Options.Count - 1); Invalidate();
+        }
+        var hit = HitTest(e.Location); if (hit != (int)hover) { hover = hit; Invalidate(); }
+        base.OnMouseMove(e);
+    }
     protected override void OnMouseLeave(EventArgs e) { hover = -1; Invalidate(); base.OnMouseLeave(e); }
-    protected override void OnMouseDown(MouseEventArgs e) { Focus(); var hit = HitTest(e.Location); if (hit >= 0 && e.Button == MouseButtons.Left) SelectedIndex = hit; base.OnMouseDown(e); }
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        Focus();
+        if (e.Button == MouseButtons.Left && Options.Count > 0)
+        {
+            pressed = true; dragging = false; downX = e.X; Capture = true;
+            var knob = Segment(0, thumb); grab = knob.Contains(e.Location) ? e.X - knob.X : knob.Width / 2;
+        }
+        base.OnMouseDown(e);
+    }
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        if (pressed && e.Button == MouseButtons.Left)
+        {
+            pressed = false; Capture = false;
+            if (dragging) Settle((int)Math.Round(thumb));
+            else { var hit = HitTest(e.Location); if (hit >= 0) SelectedIndex = hit; }
+            dragging = false;
+        }
+        base.OnMouseUp(e);
+    }
+    protected override void OnMouseCaptureChanged(EventArgs e) { if (pressed && !Capture) { pressed = false; if (dragging) Settle((int)Math.Round(thumb)); dragging = false; } base.OnMouseCaptureChanged(e); }
+    /// <summary>Snaps the capsule to an option: a new one is applied; the same one just slides back into place.</summary>
+    private void Settle(int index)
+    {
+        index = Math.Clamp(index, 0, Options.Count - 1);
+        if (index != selected) { SelectedIndex = index; return; }
+        var start = thumb; UiMotion.Run(track, this, 200, p => { thumb = start + (selected - start) * p; Invalidate(); });
+    }
     protected override bool IsInputKey(Keys keyData) => keyData is Keys.Left or Keys.Right || base.IsInputKey(keyData);
     protected override void OnKeyDown(KeyEventArgs e)
     {
@@ -225,11 +274,48 @@ public sealed class SegmentedPicker : Control
 public sealed class ToggleRow : CheckBox
 {
     private float position;
+    private bool pressed, dragging, handled; private int downX; private float downPosition;
     [DefaultValue("")] public string Description { get; set; } = "";
     public ToggleRow()
     {
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque | ControlStyles.ResizeRedraw, true);
-        AutoSize = false; BackColor = UiTheme.Current.Surface; Cursor = Cursors.Hand; Margin = Padding.Empty; Font = UiTheme.Body;
+        AutoSize = false; AutoCheck = false; BackColor = UiTheme.Current.Surface; Cursor = Cursors.Hand; Margin = Padding.Empty; Font = UiTheme.Body;
+    }
+    private float S => DeviceDpi / 96f;
+    private RectangleF Track => new(Width - 56 * S, 7 * S, 48 * S, 26 * S);
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        handled = false;
+        if (e.Button == MouseButtons.Left && RectangleF.Inflate(Track, 6 * S, 6 * S).Contains(e.Location)) { pressed = true; dragging = false; downX = e.X; downPosition = position; Capture = true; }
+        base.OnMouseDown(e);
+    }
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        if (pressed && (dragging || Math.Abs(e.X - downX) > 3 * S))
+        {
+            dragging = true; UiMotion.Cancel(this);
+            position = Math.Clamp(downPosition + (e.X - downX) / (22 * S), 0, 1); Invalidate();
+        }
+        base.OnMouseMove(e);
+    }
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        if (pressed) { pressed = false; Capture = false; if (dragging) { handled = true; Settle(); } dragging = false; }
+        base.OnMouseUp(e);
+    }
+    protected override void OnMouseCaptureChanged(EventArgs e) { if (pressed && !Capture) { pressed = false; if (dragging) { handled = true; Settle(); } dragging = false; } base.OnMouseCaptureChanged(e); }
+    /// <summary>Released past the middle switches; otherwise the knob slides back.</summary>
+    private void Settle()
+    {
+        var on = position >= 0.5f;
+        if (on != Checked) { Checked = on; return; }
+        var start = position; var end = Checked ? 1f : 0f; UiMotion.Run(this, this, 180, p => { position = start + (end - start) * p; Invalidate(); });
+    }
+    protected override void OnClick(EventArgs e)
+    {
+        // A drag already decided the state; a plain click (or Space) toggles.
+        if (!handled && Enabled) Checked = !Checked;
+        handled = false; base.OnClick(e);
     }
     protected override void OnCheckedChanged(EventArgs e)
     {
@@ -240,8 +326,8 @@ public sealed class ToggleRow : CheckBox
     {
         Backdrop.Paint(e.Graphics, this, ClientRectangle);
         if (Width < 4 || Height < 4) return;
-        var t = UiTheme.Current; var g = e.Graphics; var s = DeviceDpi / 96f; g.SmoothingMode = SmoothingMode.AntiAlias;
-        var track = new RectangleF(Width - 56 * s, 7 * s, 48 * s, 26 * s);
+        var t = UiTheme.Current; var g = e.Graphics; var s = S; g.SmoothingMode = SmoothingMode.AntiAlias;
+        var track = Track;
         var on = Enabled ? t.Online : t.Muted;
         Neu.Inset(g, track, track.Height / 2, s, 0.8f, UiTheme.Blend(t.Field, UiTheme.Blend(on, t.Field, 0.25f), position));
         var knob = new RectangleF(track.X + (3 + 22 * position) * s, track.Y + 3 * s, 20 * s, 20 * s);
@@ -466,10 +552,8 @@ public sealed class BrandMark : Control
         var t = UiTheme.Current; var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; var s = DeviceDpi / 96f;
         var side = Math.Min(Width, Height) - 2 * Neu.Extent(Neu.SmallDepth, s); var r = new RectangleF((Width - side) / 2f, (Height - side) / 2f, side, side);
         if (side < 6) return;
-        Neu.Raised(g, r, r.Width * 0.32f, s, Neu.SmallDepth, t.Accent, convex: 1, rim: 1.3f);
-        using (var path = UiTheme.Rounded(r, r.Width * 0.32f)) using (var glow = new LinearGradientBrush(RectangleF.Inflate(r, 1, 1), Color.FromArgb(0, t.Glow), Color.FromArgb(150, t.Glow), 45f)) g.FillPath(glow, path);
-        using var pen = new Pen(Color.FromArgb(245, 255, 255, 255), r.Width * 0.085f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-        var heights = new[] { 0.24f, 0.48f, 0.66f, 0.36f };
-        for (var i = 0; i < 4; i++) { var x = r.X + r.Width * (0.27f + i * 0.155f); g.DrawLine(pen, x, r.Y + r.Height * (1 - heights[i]) / 2, x, r.Y + r.Height * (1 + heights[i]) / 2); }
+        // The tile casts the same soft shadow pair as everything else, then the mark is drawn on it.
+        Neu.Raised(g, RectangleF.Inflate(r, -r.Width / 64f, -r.Height / 64f), r.Width * 17f / 64f, s, Neu.SmallDepth, Color.FromArgb(24, 32, 60), rim: 0);
+        BrandArt.Draw(g, r);
     }
 }

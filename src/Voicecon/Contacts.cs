@@ -114,7 +114,7 @@ public sealed class ContactBook : IDisposable
     }
     public string Seal(FriendCard friend, CallSignal signal)
     {
-        var shared = SharedKey(friend); var plain = JsonSerializer.SerializeToUtf8Bytes(signal); var nonce = RandomNumberGenerator.GetBytes(12); var tag = new byte[16]; var cipher = new byte[plain.Length];
+        var shared = SharedKey(friend); var plain = JsonSerializer.SerializeToUtf8Bytes(signal, Compact); var nonce = RandomNumberGenerator.GetBytes(12); var tag = new byte[16]; var cipher = new byte[plain.Length];
         try
         {
             using var aes = new AesGcm(shared, 16); aes.Encrypt(nonce, plain, cipher, tag, Encoding.ASCII.GetBytes(Id + friend.Id));
@@ -122,6 +122,10 @@ public sealed class ContactBook : IDisposable
         }
         finally { CryptographicOperations.ZeroMemory(shared); }
     }
+    /// <summary>Keeps non-Latin text as UTF-8 instead of \u escapes, so a message fits the delivery limit.</summary>
+    private static readonly JsonSerializerOptions Compact = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    /// <summary>How long an offline chat message may wait on the delivery service (ntfy keeps 12 hours).</summary>
+    public const long MessageLifetimeSeconds = 13 * 3600;
     public (FriendCard Friend, CallSignal Signal)? Open(string message)
     {
         if (message.Length > 4096) return null;
@@ -137,7 +141,14 @@ public sealed class ContactBook : IDisposable
                 aes.Decrypt(Convert.FromBase64String(envelope.N), cipher, Convert.FromBase64String(envelope.T), plain, Encoding.ASCII.GetBytes(friend.Id + Id));
                 var signal = JsonSerializer.Deserialize<CallSignal>(plain);
                 var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                if (signal is null || !Guid.TryParse(signal.Id, out _) || signal.Time < now - 90 || signal.Time > now + 90 || signal.Kind is not ("offer" or "answer" or "reject" or "cancel" or "busy")) return null;
+                if (signal is null || !Guid.TryParse(signal.Id, out _) || signal.Kind is not ("offer" or "answer" or "reject" or "cancel" or "busy" or "msg")) return null;
+                // Call signals are live (±90 s); chat messages may have waited for us on the delivery service.
+                if (signal.Kind == "msg" ? signal.Time < now - MessageLifetimeSeconds || signal.Time > now + 300 : signal.Time < now - 90 || signal.Time > now + 90) return null;
+                if (signal.Kind == "msg")
+                {
+                    if (signal.Code is not { Length: > 0 } text) return null;
+                    signal = signal with { Code = new string(text.Where(c => c == '\n' || !char.IsControl(c)).Take(OfflineMessageLimit).ToArray()) };
+                }
                 if (signal.Group is not null && !Guid.TryParseExact(signal.Group, "N", out _)) signal = signal with { Group = null, Title = null };
                 if (signal.Title is { } title) signal = signal with { Title = new string(title.Where(c => !char.IsControl(c)).Take(40).ToArray()) };
                 return (friend, signal);
@@ -146,6 +157,8 @@ public sealed class ContactBook : IDisposable
         }
         catch (Exception ex) when (ex is JsonException or FormatException or CryptographicException or ArgumentException) { return null; }
     }
+    /// <summary>Longest chat message sent through the delivery service in one piece.</summary>
+    public const int OfflineMessageLimit = 900;
     private void Save()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!); var secret = key.ExportPkcs8PrivateKey();

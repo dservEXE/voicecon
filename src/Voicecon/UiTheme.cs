@@ -11,11 +11,11 @@ public sealed record ThemePalette(string Id, string Name, bool Dark, Color Backg
     Color Border, Color Text, Color Muted, Color Accent, Color AccentInk, Color Danger, Color Glow, Color Online)
 {
     /// <summary>Shadow cast to the bottom right of raised shapes.</summary>
-    public Color ShadowDark => Color.FromArgb(Dark ? 190 : 90, UiTheme.Blend(Background, Color.Black, 0.72f));
+    public Color ShadowDark => Dark ? Color.FromArgb(190, UiTheme.Blend(Background, Color.Black, 0.72f)) : Color.FromArgb(175, UiTheme.Blend(Background, Color.FromArgb(118, 130, 160), 0.85f));
     /// <summary>Soft light cast to the top left.</summary>
-    public Color ShadowLight => Color.FromArgb(Dark ? 60 : 230, UiTheme.Blend(Background, Color.White, 0.6f));
-    public Color InsetDark => Color.FromArgb(Dark ? 200 : 80, UiTheme.Blend(Field, Color.Black, 0.78f));
-    public Color InsetLight => Color.FromArgb(Dark ? 40 : 200, UiTheme.Blend(Field, Color.White, 0.5f));
+    public Color ShadowLight => Dark ? Color.FromArgb(60, UiTheme.Blend(Background, Color.White, 0.6f)) : Color.FromArgb(255, 255, 255, 255);
+    public Color InsetDark => Dark ? Color.FromArgb(200, UiTheme.Blend(Field, Color.Black, 0.78f)) : Color.FromArgb(150, UiTheme.Blend(Field, Color.FromArgb(112, 124, 156), 0.82f));
+    public Color InsetLight => Dark ? Color.FromArgb(40, UiTheme.Blend(Field, Color.White, 0.5f)) : Color.FromArgb(235, 255, 255, 255);
 }
 
 public enum MotionLevel { Full, Minimal, Off }
@@ -31,7 +31,9 @@ public static class UiTheme
         new("amethyst", "Аметист", true, Hex(0x2D2738), Hex(0x2D2738), Hex(0x272130), Hex(0x403753), Hex(0xF1ECF9), Hex(0xA69BBA), Hex(0xC59BFF), Hex(0x221236), Hex(0xFF84A0), Hex(0xFF8AD8), Hex(0x6FDDB0)),
         new("sage", "Изумруд", true, Hex(0x27302B), Hex(0x27302B), Hex(0x212924), Hex(0x37443C), Hex(0xE9F3EB), Hex(0x9AAE9F), Hex(0x8FDCAA), Hex(0x0E2418), Hex(0xF09A9C), Hex(0x5FC6C1), Hex(0x7BE0A0)),
         new("gold", "Янтарь", true, Hex(0x2F2B23), Hex(0x2F2B23), Hex(0x28251E), Hex(0x463F31), Hex(0xFBF2DE), Hex(0xB5A88A), Hex(0xFFC857), Hex(0x241800), Hex(0xFF8F7A), Hex(0xFF8447), Hex(0x8BD48A)),
-        new("rose", "Гранат", true, Hex(0x322930), Hex(0x322930), Hex(0x2B2329), Hex(0x4A3A45), Hex(0xF7EBF0), Hex(0xBAA2AD), Hex(0xF2A7BA), Hex(0x351A23), Hex(0xFF8C9C), Hex(0xA98BFF), Hex(0x74D6A4))
+        new("rose", "Гранат", true, Hex(0x322930), Hex(0x322930), Hex(0x2B2329), Hex(0x4A3A45), Hex(0xF7EBF0), Hex(0xBAA2AD), Hex(0xF2A7BA), Hex(0x351A23), Hex(0xFF8C9C), Hex(0xA98BFF), Hex(0x74D6A4)),
+        // The classic neumorphic light: a cool pearl grey with white light and blue-grey shadows.
+        new("pearl", "Жемчуг", false, Hex(0xE3E7EE), Hex(0xE3E7EE), Hex(0xDCE1E9), Hex(0xC6CEDB), Hex(0x283043), Hex(0x6C7588), Hex(0x6E7CF2), Hex(0xFFFFFF), Hex(0xE2546C), Hex(0xB07CF0), Hex(0x29AD76))
     ];
     public static ThemePalette Current { get; private set; } = All[0];
     public static void Select(string? id) => Current = All.FirstOrDefault(t => t.Id == id) ?? All[0];

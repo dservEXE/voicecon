@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Voicecon;
 
-/// <summary>One idle websocket for encrypted call invitations. Never transports media or chat.</summary>
+/// <summary>One idle websocket for encrypted call invitations and offline chat messages. Never transports media.</summary>
 public sealed class CallMailbox : IDisposable
 {
     private readonly ContactBook book;
@@ -16,14 +16,19 @@ public sealed class CallMailbox : IDisposable
     public bool Connected { get; private set; }
     public event Action<bool>? ConnectivityChanged;
     public event Action<FriendCard, CallSignal>? Received;
+    /// <summary>Unix time of the newest delivery event seen; the next connection asks only for what came after it.</summary>
+    public long Since { get; set; }
+    public event Action<long>? SinceChanged;
     public CallMailbox(ContactBook book, FriendCard own) { this.book = book; this.own = own; }
     public void Start() => listener ??= Task.Run(Listen);
-    public async Task SendAsync(FriendCard friend, CallSignal signal)
+    /// <param name="keep">Let the service hold the message for an offline friend (chat). Call signals are never stored.</param>
+    public async Task SendAsync(FriendCard friend, CallSignal signal, bool keep = false)
     {
         var body = book.Seal(friend, signal);
         if (Encoding.UTF8.GetByteCount(body) > 4000) throw new InvalidOperationException("Слишком большой сетевой код для доставки. Используйте подключение по коду или свой сервис ntfy с увеличенным лимитом.");
         using var request = new HttpRequestMessage(HttpMethod.Post, friend.Server + "/" + friend.Inbox) { Content = new StringContent(body, Encoding.UTF8, "text/plain") };
-        request.Headers.Add("Cache", "no"); request.Headers.Add("Firebase", "no");
+        if (!keep) request.Headers.Add("Cache", "no");
+        request.Headers.Add("Firebase", "no");
         using var response = await http.SendAsync(request, lifetime.Token);
         if ((int)response.StatusCode == 429) throw new InvalidOperationException("Сервис доставки временно ограничил запросы. Подождите или используйте подключение по коду.");
         response.EnsureSuccessStatusCode();
@@ -36,7 +41,8 @@ public sealed class CallMailbox : IDisposable
             try
             {
                 using var socket = new ClientWebSocket(); socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(45);
-                var uri = new UriBuilder(own.Server) { Scheme = "wss", Path = new Uri(own.Server).AbsolutePath.TrimEnd('/') + "/" + own.Inbox + "/ws" }.Uri;
+                var since = Math.Max(Since, DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ContactBook.MessageLifetimeSeconds);
+                var uri = new UriBuilder(own.Server) { Scheme = "wss", Path = new Uri(own.Server).AbsolutePath.TrimEnd('/') + "/" + own.Inbox + "/ws", Query = "since=" + since }.Uri;
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); timeout.CancelAfter(TimeSpan.FromSeconds(20));
                 await socket.ConnectAsync(uri, timeout.Token); Connected = true; ConnectivityChanged?.Invoke(true); retry = 1;
                 var bytes = new byte[8192];
@@ -53,6 +59,7 @@ public sealed class CallMailbox : IDisposable
                     if (result.MessageType == WebSocketMessageType.Close) break;
                     using var json = JsonDocument.Parse(message.ToArray());
                     if (!json.RootElement.TryGetProperty("event", out var kind) || kind.GetString() != "message" || !json.RootElement.TryGetProperty("message", out var body)) continue;
+                    if (json.RootElement.TryGetProperty("time", out var time) && time.TryGetInt64(out var stamped) && stamped > Since) { Since = stamped; SinceChanged?.Invoke(stamped); }
                     var opened = book.Open(body.GetString() ?? ""); if (opened is not { } item) continue;
                     var stamp = item.Friend.Id + item.Signal.Kind + item.Signal.Id;
                     if (!seen.Add(stamp)) continue; if (seen.Count > 512) { seen.Clear(); seen.Add(stamp); }
