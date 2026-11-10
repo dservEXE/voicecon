@@ -4,7 +4,8 @@ namespace Voicecon;
 
 public sealed partial class MainForm
 {
-    private readonly SurfacePanel settingsDrawer = new() { Gutter = 0, Radius = 22, Elevation = 0, Padding = new Padding(18, 14, 10, 12) };
+    /// <summary>The settings page: a full sheet over the conversation area that slides in from the right.</summary>
+    private readonly SurfacePanel settingsDrawer = new() { Gutter = 0, Radius = 0, Elevation = 0 };
     private readonly ThemedScrollHost settingsScroller = new() { Dock = DockStyle.Fill };
     private readonly SlimSlider microphoneGain = new();
     private readonly UiLabel microphoneGainValue = new(), chatUsage = new();
@@ -12,94 +13,129 @@ public sealed partial class MainForm
     private readonly SegmentedPicker animationPicker = new();
     private readonly ToggleRow messageSounds = new(), showOnline = new(), showMetrics = new();
     private readonly SoftButton closeSettings = new(), refresh = new(), network = new(), devToggle = new(), manualCodes = new(), clearHistory = new(), openLogs = new(), aboutButton = new(), copyCode = new();
-    private TableLayoutPanel? devPanel;
-    private RowStyle? devRow;
+    private TableLayoutPanel? devPanel, settingsPage, settingsTop;
+    private RowStyle? devRow, devCardRow;
     private Control? devAnchor;
     private bool settingsOpen, devExpanded;
     private float drawerProgress;
+    private readonly SlideOverlay slide = new();
+    private const int SettingsColumn = 720;
 
     private void BuildSettingsDrawer()
     {
-        settingsDrawer.Visible = false; settingsDrawer.Wash = Color.FromArgb(205, UiTheme.Current.Background);
+        settingsDrawer.Visible = false;
         var outer = Grid(1); settingsDrawer.Controls.Add(outer);
-        var top = Columns(-1, 44); top.Controls.Add(TextLabel("Настройки", 15, TextTone.Normal, true), 0, 0);
-        PrepareButton(closeSettings, "", UiIcon.Close, ButtonTone.Quiet); closeSettings.Circle = true; closeSettings.AccessibleName = "Закрыть настройки"; top.Controls.Add(closeSettings, 1, 0);
-        AddRow(outer, top, 44);
+        settingsTop = Columns(-1, 60); settingsTop.Padding = new Padding(0, 8, 0, 0);
+        var titles = Grid(1); AddRow(titles, TextLabel("Настройки", 17, TextTone.Normal, true), 32); AddRow(titles, TextLabel("Изменения применяются сразу", 8.5f, TextTone.Muted), 20);
+        settingsTop.Controls.Add(titles, 0, 0);
+        PrepareButton(closeSettings, "", UiIcon.Close, ButtonTone.Secondary); closeSettings.Circle = true; closeSettings.AccessibleName = "Закрыть настройки"; tips.SetToolTip(closeSettings, "Закрыть · Esc"); settingsTop.Controls.Add(closeSettings, 1, 0);
+        AddRow(outer, settingsTop, 66);
         AddRow(outer, settingsScroller, 0); outer.RowStyles[^1].SizeType = SizeType.Percent; outer.RowStyles[^1].Height = 100;
-        var grid = Grid(1); grid.Dock = DockStyle.Top; grid.AutoSize = true; grid.AutoSizeMode = AutoSizeMode.GrowAndShrink; grid.Padding = new Padding(0, 0, 10, 16);
-        settingsScroller.SetContent(grid);
+        var page = Grid(1); page.Dock = DockStyle.Top; page.AutoSize = true; page.AutoSizeMode = AutoSizeMode.GrowAndShrink; page.Padding = new Padding(0, 0, 0, 18); settingsPage = page;
+        settingsScroller.SetContent(page); settingsScroller.SizeChanged += (_, _) => CenterSettings();
 
-        Section(grid, "Профиль");
-        AddRow(grid, TextLabel("Имя для друзей", 9, TextTone.Muted), 24); name.MaxLength = 24; name.Text = settings.Name; AddRow(grid, InputSurface(name, false), 42);
-        AddRow(grid, Space(), 8); PrepareButton(copyCode, "Скопировать мой код друга", UiIcon.Copy); AddRow(grid, copyCode, 46);
+        var profile = SettingsCard("Профиль", UiIcon.Person);
+        AddRow(profile, TextLabel("Имя для друзей", 9, TextTone.Muted), 24); name.MaxLength = 24; name.Text = settings.Name; AddRow(profile, InputSurface(name, false), 42);
+        AddRow(profile, Space(), 8); PrepareButton(copyCode, "Скопировать мой код друга", UiIcon.Copy); AddRow(profile, copyCode, 48);
+        FinishCard(page, profile);
 
-        Section(grid, "Звук");
-        AddRow(grid, TextLabel("Микрофон", 9, TextTone.Muted), 24);
-        var micRow = Columns(-1, 8, 44); PrepareCombo(microphones); micRow.Controls.Add(microphones, 0, 0);
-        PrepareButton(refresh, "", UiIcon.Refresh, ButtonTone.Quiet); refresh.Circle = true; refresh.AccessibleName = "Обновить список устройств"; tips.SetToolTip(refresh, "Обновить список устройств"); micRow.Controls.Add(refresh, 2, 0); AddRow(grid, micRow, 42);
-        AddRow(grid, TextLabel("Наушники", 9, TextTone.Muted), 24); PrepareCombo(speakers); AddRow(grid, speakers, 42);
-        AddLevel(grid, "Громкость приложения", volume, volumeValue, settings.Volume);
-        AddLevel(grid, "Усиление микрофона", microphoneGain, microphoneGainValue, settings.MicrophoneGain);
-        AddRow(grid, Space(), 6);
-        SetupToggle(noise, "Шумоподавление", "Убирает ровный фон и гул", settings.NoiseSuppression); AddRow(grid, noise, 52);
-        SetupToggle(ptt, "Говорить по кнопке", "Голос передаётся, пока клавиша нажата", settings.PushToTalk); AddRow(grid, ptt, 52);
-        var keyRow = Columns(-1, 170); keyRow.Controls.Add(TextLabel("Клавиша разговора", 9, TextTone.Muted), 0, 0);
+        var sound = SettingsCard("Звук", UiIcon.Headphones);
+        AddRow(sound, TextLabel("Микрофон", 9, TextTone.Muted), 24);
+        var micRow = Columns(-1, 8, 48); PrepareCombo(microphones); micRow.Controls.Add(microphones, 0, 0);
+        PrepareButton(refresh, "", UiIcon.Refresh, ButtonTone.Quiet); refresh.Circle = true; refresh.AccessibleName = "Обновить список устройств"; tips.SetToolTip(refresh, "Обновить список устройств"); micRow.Controls.Add(refresh, 2, 0); AddRow(sound, micRow, 48);
+        AddRow(sound, TextLabel("Наушники", 9, TextTone.Muted), 24); PrepareCombo(speakers); AddRow(sound, speakers, 48);
+        AddLevel(sound, "Громкость приложения", volume, volumeValue, settings.Volume);
+        AddLevel(sound, "Усиление микрофона", microphoneGain, microphoneGainValue, settings.MicrophoneGain);
+        AddRow(sound, Space(), 6);
+        SetupToggle(noise, "Шумоподавление", "Убирает ровный фон и гул", settings.NoiseSuppression); AddRow(sound, noise, 52);
+        SetupToggle(ptt, "Говорить по кнопке", "Голос передаётся, пока клавиша нажата", settings.PushToTalk); AddRow(sound, ptt, 52);
+        var keyRow = Columns(-1, 190); keyRow.Controls.Add(TextLabel("Клавиша разговора", 9, TextTone.Muted), 0, 0);
         PrepareCombo(talkKey); talkKey.Items.AddRange([new KeyChoice("V", 0x56), new KeyChoice("Caps Lock", 0x14), new KeyChoice("Мышь 4", 0x05), new KeyChoice("Мышь 5", 0x06)]);
-        talkKey.SelectedIndex = Math.Max(0, talkKey.Items.Cast<KeyChoice>().ToList().FindIndex(k => k.Code == settings.TalkKey)); talkKey.Enabled = settings.PushToTalk; keyRow.Controls.Add(talkKey, 1, 0); AddRow(grid, keyRow, 42);
+        talkKey.SelectedIndex = Math.Max(0, talkKey.Items.Cast<KeyChoice>().ToList().FindIndex(k => k.Code == settings.TalkKey)); talkKey.Enabled = settings.PushToTalk; keyRow.Controls.Add(talkKey, 1, 0); AddRow(sound, keyRow, 48);
+        FinishCard(page, sound);
 
-        Section(grid, "Уведомления");
-        SetupToggle(notifications, "Звуки событий", "Подключения, демонстрации, зрители. Без звуков нажатий", settings.NotificationSounds); AddRow(grid, notifications, 52);
-        SetupToggle(messageSounds, "Звук новых сообщений", "Тихая капля, когда пишут в чат звонка", settings.MessageSounds); AddRow(grid, messageSounds, 52);
-        AddRow(grid, TextLabel("Мелодия входящего звонка", 9, TextTone.Muted), 26);
+        var alerts = SettingsCard("Уведомления", UiIcon.Volume);
+        SetupToggle(notifications, "Звуки событий", "Подключения, демонстрации, зрители. Без звуков нажатий", settings.NotificationSounds); AddRow(alerts, notifications, 52);
+        SetupToggle(messageSounds, "Звук новых сообщений", "Тихая капля, когда пишут в чат звонка", settings.MessageSounds); AddRow(alerts, messageSounds, 52);
+        AddRow(alerts, TextLabel("Мелодия входящего звонка", 9, TextTone.Muted), 26);
         PrepareCombo(ringtones); ringtones.Items.AddRange([new Choice("boris", "Flying Bird · Boris Brejcha"), new Choice("birdmachine", "Bird Machine · Jingle Bells"), new Choice("soft", "Капли · мягкий"), new Choice("bell", "Старый телефон"), new Choice("custom", "Свой WAV или MP3")]);
-        ringtones.SelectedIndex = settings.Ringtone switch { "birdmachine" => 1, "soft" => 2, "bell" => 3, "custom" => 4, _ => 0 }; AddRow(grid, ringtones, 42);
+        ringtones.SelectedIndex = settings.Ringtone switch { "birdmachine" => 1, "soft" => 2, "bell" => 3, "custom" => 4, _ => 0 }; AddRow(alerts, ringtones, 48);
         var ringButtons = Columns(-50, 8, -50);
-        var choose = new SoftButton { Text = "Свой файл", Glyph = UiIcon.Folder, Tone = ButtonTone.Quiet, Dock = DockStyle.Fill }; var preview = new SoftButton { Text = "Прослушать", Glyph = UiIcon.Volume, Tone = ButtonTone.Quiet, Dock = DockStyle.Fill };
+        var choose = new SoftButton { Text = "Свой файл", Glyph = UiIcon.Folder, Tone = ButtonTone.Secondary, Dock = DockStyle.Fill }; var preview = new SoftButton { Text = "Прослушать", Glyph = UiIcon.Volume, Tone = ButtonTone.Secondary, Dock = DockStyle.Fill };
         choose.Click += (_, _) => { using var picker = new OpenFileDialog { Filter = "Звук WAV или MP3|*.wav;*.mp3", Title = "Мелодия входящего звонка", CheckFileExists = true }; if (picker.ShowDialog(this) == DialogResult.OK) { settings.RingtoneFile = picker.FileName; settings.Ringtone = "custom"; ringtones.SelectedIndex = 4; SaveSettings(); } };
         preview.Click += (_, _) => sounds.PlayRing(settings.Ringtone, settings.RingtoneFile, OutputDevice);
-        ringButtons.Controls.Add(choose, 0, 0); ringButtons.Controls.Add(preview, 2, 0); AddRow(grid, ringButtons, 42);
+        ringButtons.Controls.Add(choose, 0, 0); ringButtons.Controls.Add(preview, 2, 0); AddRow(alerts, ringButtons, 48);
+        FinishCard(page, alerts);
 
-        Section(grid, "Оформление");
-        AddRow(grid, TextLabel("Тема", 9, TextTone.Muted), 24); themes.Selected = UiTheme.Current.Id; themes.AccessibleName = "Тема оформления"; AddRow(grid, themes, 52);
-        AddRow(grid, TextLabel("Анимации", 9, TextTone.Muted), 26);
+        var look = SettingsCard("Оформление", UiIcon.Palette);
+        AddRow(look, TextLabel("Тема", 9, TextTone.Muted), 24); themes.Selected = UiTheme.Current.Id; themes.AccessibleName = "Тема оформления"; AddRow(look, themes, 58);
+        AddRow(look, TextLabel("Анимации", 9, TextTone.Muted), 26);
         animationPicker.Options.Add(new("Полные")); animationPicker.Options.Add(new("Минимум")); animationPicker.Options.Add(new("Выкл."));
         animationPicker.SetSilently(UiMotion.Parse(settings.AnimationLevel) switch { MotionLevel.Minimal => 1, MotionLevel.Off => 2, _ => 0 }); animationPicker.AccessibleName = "Анимации";
         tips.SetToolTip(animationPicker, "Минимум: короткие переходы без декоративных эффектов. Выкл.: всё мгновенно.");
-        AddRow(grid, animationPicker, 42);
+        AddRow(look, animationPicker, 48);
+        FinishCard(page, look);
 
-        Section(grid, "Горячие клавиши");
-        AddRow(grid, TextLabel("Пусто — не назначено. Нажмите поле и клавишу · Esc — отмена · ПКМ — убрать", 8.5f, TextTone.Muted), 34);
-        AddHotkey(grid, "Микрофон", micKey, settings.MicrophoneHotkey); AddHotkey(grid, "Наушники и весь звук", earsKey, settings.HeadphonesHotkey); AddHotkey(grid, "Открыть окно", openKey, settings.OpenWindowHotkey);
-        AddHotkey(grid, "Демонстрация экрана", screenKey, settings.ScreenHotkey); AddHotkey(grid, "Камера", cameraKey, settings.CameraHotkey);
+        var keys = SettingsCard("Горячие клавиши", UiIcon.Sliders);
+        AddRow(keys, TextLabel("Пусто — не назначено. Нажмите поле и клавишу · Esc — отмена · ПКМ — убрать", 8.5f, TextTone.Muted), 30);
+        AddHotkey(keys, "Микрофон", micKey, settings.MicrophoneHotkey); AddHotkey(keys, "Наушники и весь звук", earsKey, settings.HeadphonesHotkey); AddHotkey(keys, "Открыть окно", openKey, settings.OpenWindowHotkey);
+        AddHotkey(keys, "Демонстрация экрана", screenKey, settings.ScreenHotkey); AddHotkey(keys, "Камера", cameraKey, settings.CameraHotkey);
+        FinishCard(page, keys);
 
-        Section(grid, "Система");
-        SetupToggle(startup, "Запускать вместе с Windows", "Сразу в трее, без окна", settings.StartWithWindows); AddRow(grid, startup, 52);
-        SetupToggle(showOnline, "Показывать друзьям, что я в сети", "Без имени и адресов: только «в сети» или «в звонке»", settings.ShowOnlineStatus); AddRow(grid, showOnline, 52);
-        AddUpdateSettings(grid);
+        var system = SettingsCard("Система", UiIcon.Gear);
+        SetupToggle(startup, "Запускать вместе с Windows", "Сразу в трее, без окна", settings.StartWithWindows); AddRow(system, startup, 52);
+        SetupToggle(showOnline, "Показывать друзьям, что я в сети", "Без имени и адресов: только «в сети» или «в звонке»", settings.ShowOnlineStatus); AddRow(system, showOnline, 52);
+        AddUpdateSettings(system);
+        FinishCard(page, system);
 
-        AddRow(grid, Space(), 18);
-        PrepareButton(devToggle, "Для разработчиков", UiIcon.Chevron, ButtonTone.Quiet); devToggle.Font = UiTheme.Small; AddRow(grid, devToggle, 36); devAnchor = devToggle;
+        var dev = SettingsCard("Для разработчиков", UiIcon.Info, collapsed: true);
+        PrepareButton(devToggle, "Показать раздел", UiIcon.Chevron, ButtonTone.Secondary); devToggle.Font = UiTheme.Small; AddRow(dev, devToggle, 46); devAnchor = devToggle;
         devPanel = Grid(1);
+        AddRow(devPanel, Space(), 8);
         SetupToggle(gate, "Тишина в паузах", "Закрывает микрофон ниже порога громкости", settings.NoiseGate); AddRow(devPanel, gate, 52);
         SetupToggle(showMetrics, "Показывать нагрузку и трафик", "CPU, память и кбит/с внизу окна", settings.ShowMetrics); AddRow(devPanel, showMetrics, 52);
-        PrepareButton(network, "Сеть: STUN, TURN и доставка", UiIcon.Sliders); AddRow(devPanel, network, 46); AddRow(devPanel, Space(), 6);
-        PrepareButton(manualCodes, "Подключение по разовому коду", UiIcon.Copy); AddRow(devPanel, manualCodes, 46); AddRow(devPanel, Space(), 10);
+        PrepareButton(network, "Сеть: STUN, TURN и доставка", UiIcon.Sliders); AddRow(devPanel, network, 48); AddRow(devPanel, Space(), 4);
+        PrepareButton(manualCodes, "Подключение по разовому коду", UiIcon.Copy); AddRow(devPanel, manualCodes, 48); AddRow(devPanel, Space(), 10);
         PrepareLabel(chatUsage, TextTone.Muted); chatUsage.Font = UiTheme.Small; AddRow(devPanel, chatUsage, 22);
-        PrepareButton(clearHistory, "Очистить историю чатов", UiIcon.Trash, ButtonTone.Quiet); AddRow(devPanel, clearHistory, 42);
-        PrepareButton(openLogs, "Открыть папку журнала", UiIcon.Folder, ButtonTone.Quiet); AddRow(devPanel, openLogs, 42);
-        PrepareButton(aboutButton, "О приложении и лицензии", UiIcon.Info, ButtonTone.Quiet); AddRow(devPanel, aboutButton, 42);
-        var devIndex = grid.RowCount; AddRow(grid, devPanel, 0); devRow = grid.RowStyles[devIndex]; devPanel.Visible = false;
+        PrepareButton(clearHistory, "Очистить историю чатов", UiIcon.Trash, ButtonTone.Quiet); AddRow(devPanel, clearHistory, 44);
+        PrepareButton(openLogs, "Открыть папку журнала", UiIcon.Folder, ButtonTone.Quiet); AddRow(devPanel, openLogs, 44);
+        PrepareButton(aboutButton, "О приложении и лицензии", UiIcon.Info, ButtonTone.Quiet); AddRow(devPanel, aboutButton, 44);
+        var devIndex = dev.RowCount; AddRow(dev, devPanel, 0); devRow = dev.RowStyles[devIndex]; devPanel.Visible = false;
+        devCardRow = FinishCard(page, dev);
 
         mainHost.Controls.Add(settingsDrawer); settingsDrawer.BringToFront();
+        mainHost.Controls.Add(slide); slide.BringToFront();
     }
-    private static void Section(TableLayoutPanel grid, string title)
+    /// <summary>A raised section card with an icon and a title; rows are added to the returned grid.</summary>
+    private static TableLayoutPanel SettingsCard(string title, UiIcon icon, bool collapsed = false)
     {
-        AddRow(grid, Space(), 16); AddRow(grid, TextLabel(title.ToUpperInvariant(), 8, TextTone.Accent, true), 24); AddRow(grid, new DividerLine(), 8);
+        var inner = Grid(1);
+        var head = Columns(30, -1); head.Controls.Add(new GlyphMark { Glyph = icon, Dock = DockStyle.Fill, Margin = Padding.Empty }, 0, 0);
+        var label = TextLabel(title, 11.5f, TextTone.Normal, true); label.Padding = new Padding(4, 0, 0, 0); head.Controls.Add(label, 1, 0);
+        AddRow(inner, head, 34); if (!collapsed) AddRow(inner, Space(), 6);
+        return inner;
+    }
+    /// <summary>Wraps the grid in a card sized to its rows and adds it to the page.</summary>
+    private static RowStyle FinishCard(TableLayoutPanel page, TableLayoutPanel inner)
+    {
+        var card = new SurfacePanel { Padding = new Padding(22, 16, 22, 16) }; card.Controls.Add(inner);
+        var height = inner.RowStyles.Cast<RowStyle>().Sum(r => r.Height) + card.Padding.Vertical + 2 * Neu.Extent(card.Elevation, 1);
+        AddRow(page, card, (int)Math.Ceiling(height)); return page.RowStyles[^1];
+    }
+    /// <summary>Keeps the settings in one readable column centred on wide windows.</summary>
+    private void CenterSettings()
+    {
+        if (settingsPage is null || settingsTop is null) return;
+        var scale = DeviceDpi / 96f; var gutter = Neu.Extent(1, scale);
+        var side = Math.Max(0, (settingsScroller.ClientSize.Width - (int)(SettingsColumn * scale)) / 2);
+        if (settingsPage.Padding.Left != side) settingsPage.Padding = new Padding(side, 0, side, settingsPage.Padding.Bottom);
+        var top = new Padding(side + gutter + (int)(6 * scale), settingsTop.Padding.Top, side + gutter - (int)(4 * scale), 0);
+        if (settingsTop.Padding != top) settingsTop.Padding = top;
     }
     private static void AddLevel(TableLayoutPanel grid, string title, SlimSlider slider, UiLabel value, int initial)
     {
         var row = Columns(-1, 70); row.Controls.Add(TextLabel(title, 9, TextTone.Muted), 0, 0); PrepareLabel(value, TextTone.Accent); value.TextAlign = ContentAlignment.MiddleRight; value.Text = $"{initial}%"; row.Controls.Add(value, 1, 0);
-        AddRow(grid, row, 28); slider.Maximum = AudioLevels.MaximumPercent; slider.Value = initial; AddRow(grid, slider, 30);
+        AddRow(grid, row, 28); slider.Maximum = AudioLevels.MaximumPercent; slider.Value = initial; AddRow(grid, slider, 36);
     }
     private static void AddHotkey(TableLayoutPanel grid, string label, HotkeyBox box, int chord)
     {
@@ -156,35 +192,74 @@ public sealed partial class MainForm
 
     private void ToggleDeveloper()
     {
-        if (devPanel is null || devRow is null) return;
+        if (devPanel is null || devRow is null || devCardRow is null) return;
         devExpanded = !devExpanded; UpdateChatUsage();
-        var target = devExpanded ? devPanel.RowStyles.Cast<RowStyle>().Sum(r => r.Height) : 0; var start = devRow.Height; devPanel.Visible = true;
-        devToggle.Text = devExpanded ? "Скрыть раздел для разработчиков" : "Для разработчиков";
-        UiMotion.Run(devRow, this, 240, p => { devRow.Height = start + (target - start) * p; settingsScroller.UpdateRange(); },
+        var target = devExpanded ? devPanel.RowStyles.Cast<RowStyle>().Sum(r => r.Height) : 0; var start = devRow.Height; var cardStart = devCardRow.Height; devPanel.Visible = true;
+        devToggle.Text = devExpanded ? "Скрыть раздел" : "Показать раздел";
+        UiMotion.Run(devRow, this, 260, p => { var h = start + (target - start) * p; devCardRow.Height = cardStart + h - start; devRow.Height = h; settingsScroller.UpdateRange(); },
             () => { devPanel.Visible = devExpanded; settingsScroller.UpdateRange(); if (devExpanded && devAnchor is not null) settingsScroller.ScrollTo(devAnchor); });
     }
     private void UpdateChatUsage() => chatUsage.Text = chats is null ? "История чатов недоступна" : $"История чатов: {chats.TotalBytes / 1048576.0:0.0} МБ из {chats.Limit / 1048576} МБ · старые сообщения удаляются автоматически";
 
     private void ToggleSettings() { if (settingsOpen) CloseSettings(); else OpenSettings(); }
+    /// <summary>
+    /// The page slides as two snapshots on one overlay: the real controls stay still, so every frame is two blits and the
+    /// slide holds the monitor rate (170 Hz included). A slide reverses cleanly if the button is pressed again mid-way.
+    /// </summary>
     private void OpenSettings()
     {
         if (settingsOpen) return; settingsOpen = true; settingsButton.Selected = false; UpdateChatUsage();
-        settingsDrawer.Visible = true; settingsDrawer.BringToFront(); var start = drawerProgress;
-        UiMotion.Run(settingsDrawer, this, 260, p => { drawerProgress = start + (1 - start) * p; PlaceDrawer(true); });
+        if (!UiMotion.WillAnimate(this) || mainHost.Width < 10)
+        {
+            UiMotion.Cancel(settingsDrawer); slide.End(); drawerProgress = 1; settingsDrawer.Visible = true; PlaceDrawer(false); settingsDrawer.BringToFront(); return;
+        }
+        if (!slide.Active)
+        {
+            var under = SlideOverlay.FromScreen(mainHost);
+            // Lay the page out off-screen and render it once; nothing on screen changes until the overlay appears.
+            drawerProgress = 0; PlaceDrawer(true);
+            if (!settingsDrawer.Visible) settingsDrawer.Visible = true;
+            settingsDrawer.PerformLayout(); CenterSettings();
+            slide.Bounds = new Rectangle(Point.Empty, mainHost.ClientSize);
+            slide.Begin(under, SlideOverlay.Render(settingsDrawer), mainHost.Width);
+        }
+        var start = drawerProgress;
+        UiMotion.Run(settingsDrawer, this, 300, p => { drawerProgress = start + (1 - start) * p; slide.SetEdge(SheetLeft(drawerProgress)); },
+            () => { PlaceDrawer(false); settingsDrawer.BringToFront(); slide.End(); }, glide: true);
     }
     private void CloseSettings()
     {
-        if (!settingsOpen) return; settingsOpen = false; var start = drawerProgress;
-        UiMotion.Run(settingsDrawer, this, 220, p => { drawerProgress = start * (1 - p); PlaceDrawer(true); }, () => settingsDrawer.Visible = false);
-        PersistSettings();
+        if (!settingsOpen) return; settingsOpen = false; PersistSettings();
+        if (!UiMotion.WillAnimate(this) || mainHost.Width < 10)
+        {
+            UiMotion.Cancel(settingsDrawer); slide.End(); drawerProgress = 0; settingsDrawer.Visible = false; return;
+        }
+        if (!slide.Active)
+        {
+            var main = mainHost.Controls.Cast<Control>().First(c => c != settingsDrawer && c != slide);
+            slide.Bounds = new Rectangle(Point.Empty, mainHost.ClientSize);
+            slide.Begin(SlideOverlay.Render(main), SlideOverlay.FromScreen(settingsDrawer), SheetLeft(drawerProgress));
+        }
+        var start = drawerProgress;
+        UiMotion.Run(settingsDrawer, this, 260, p => { drawerProgress = start * (1 - p); slide.SetEdge(SheetLeft(drawerProgress)); },
+            () => { settingsDrawer.Visible = false; slide.End(); }, glide: true);
     }
+    /// <summary>Renders the page once off-screen after start-up, so the first slide does not pay for shadow templates and layout.</summary>
+    private void WarmSettings()
+    {
+        if (IsDisposed || settingsOpen || settingsDrawer.Visible || slide.Active || mainHost.Width < 10) return;
+        drawerProgress = 0; PlaceDrawer(true); settingsDrawer.Visible = true; settingsDrawer.PerformLayout(); CenterSettings();
+        using (SlideOverlay.Render(settingsDrawer)) { }
+        if (!settingsOpen) settingsDrawer.Visible = false;
+    }
+    private int SheetLeft(float progress) => (int)Math.Round(mainHost.Width * (1 - progress));
     private void PlaceDrawer(bool moving)
     {
         if (mainHost.Width < 10) return;
-        var width = Math.Min((int)(470 * DeviceDpi / 96f), mainHost.Width);
         var progress = settingsOpen || moving ? drawerProgress : 0;
-        settingsDrawer.Bounds = new Rectangle(mainHost.Width - (int)(width * progress), 0, width, mainHost.Height);
-        if (moving) settingsDrawer.Update();
+        var bounds = new Rectangle(SheetLeft(progress), 0, mainHost.Width, mainHost.Height);
+        if (settingsDrawer.Bounds != bounds) settingsDrawer.Bounds = bounds;
+        if (!moving) CenterSettings();
     }
 
     private void ShowManualCodes()

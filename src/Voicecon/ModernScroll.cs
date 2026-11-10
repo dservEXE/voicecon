@@ -18,30 +18,31 @@ public sealed class ModernScrollBar : Control
         get
         {
             var track = Math.Max(1, Height - 8); var length = Math.Clamp((int)(track * page / (double)Math.Max(1, maximum + page)), Math.Min(track, 24 * DeviceDpi / 96), track);
-            return new Rectangle(3, 4 + (int)((track - length) * Value / (double)Math.Max(1, maximum)), Math.Max(3, Width - 6), length);
+            return new Rectangle(Width / 2 - 3, 4 + (int)((track - length) * Value / (double)Math.Max(1, maximum)), 6, length);
         }
     }
     protected override void OnPaint(PaintEventArgs e)
     {
         Backdrop.Paint(e.Graphics, this, ClientRectangle);
         if (maximum == 0) return; e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        var t = UiTheme.Current; var narrow = dragging || hovered ? 0 : 2;
-        using var track = new SolidBrush(Color.FromArgb(22, 0, 0, 0));
-        using var path = UiTheme.Rounded(new RectangleF(4, 4, Math.Max(3, Width - 8), Math.Max(1, Height - 8)), 3); e.Graphics.FillPath(track, path);
+        var t = UiTheme.Current; var narrow = dragging || hovered ? 0 : 1;
+        // A narrow engraved channel with a softly lit thumb in it.
+        var channel = new RectangleF(Width / 2f - 3, 4, 6, Math.Max(1, Height - 8));
+        Neu.Inset(e.Graphics, channel, 3, 1, 0.35f);
         var thumbRect = Thumb; thumbRect.Inflate(-narrow, 0);
-        using var brush = new SolidBrush(dragging || hovered ? UiTheme.WithAlpha(t.Accent, 220) : Color.FromArgb(70, 255, 255, 255));
+        using var brush = new SolidBrush(dragging || hovered ? UiTheme.WithAlpha(t.Accent, 230) : UiTheme.Blend(Backdrop.Behind(this), Color.White, 0.22f));
         using var thumb = UiTheme.Rounded(thumbRect, Math.Max(2, thumbRect.Width / 2f)); e.Graphics.FillPath(brush, thumb);
     }
     protected override void OnMouseDown(MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left) return;
-        var thumb = Thumb; if (thumb.Contains(e.Location)) { dragging = true; dragOffset = e.Y - thumb.Top; Capture = true; }
+        var thumb = Thumb; if (e.Y >= thumb.Top && e.Y < thumb.Bottom) { dragging = true; dragOffset = e.Y - thumb.Top; Capture = true; }
         else Value += e.Y < thumb.Top ? -page : page; Invalidate();
     }
     protected override void OnMouseMove(MouseEventArgs e)
     {
         if (dragging) { var available = Height - 8 - Thumb.Height; Value = available <= 0 ? 0 : (int)Math.Round((e.Y - 4 - dragOffset) * maximum / (double)available); }
-        var now = Thumb.Contains(e.Location); if (now != hovered) { hovered = now; Invalidate(); }
+        var now = e.Y >= Thumb.Top && e.Y < Thumb.Bottom; if (now != hovered) { hovered = now; Invalidate(); }
     }
     protected override void OnMouseUp(MouseEventArgs e) { dragging = false; Capture = false; Invalidate(); }
     protected override void OnMouseLeave(EventArgs e) { hovered = false; Invalidate(); }

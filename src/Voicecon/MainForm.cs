@@ -610,7 +610,7 @@ public sealed partial class MainForm : Form
         chatInput.Enabled = sendChat.Enabled = emoji.Enabled = canChat;
         chatInput.PlaceholderText = canChat ? "Сообщение… (Enter — отправить, Shift+Enter — новая строка)" : started && !here ? "Вы в звонке с другой беседой — выберите её слева" : "Чат доступен во время звонка";
         acceptCall.Enabled = rejectCall.Enabled = !busy;
-        if (incomingRow is not null) incomingRow.Height = incomingCall is null ? 0 : 92 * DeviceDpi / 96f;
+        if (incomingRow is not null) incomingRow.Height = incomingCall is null ? 0 : 108 * DeviceDpi / 96f;
         incomingPanel.Visible = incomingCall is not null;
         UpdateCallFeedback(); UpdateUpdateControls(); UpdateHeader(); UpdateStrip();
         mute.Selected = mute.Crossed = isMuted; mute.AccessibleName = isMuted ? "Микрофон выключен" : "Микрофон включён"; mute.Invalidate();
@@ -730,6 +730,12 @@ public sealed partial class MainForm : Form
         RegisterShortcuts(); BeginInvoke(new Action(() => { InitializeContacts(); ScheduleUpdateCheck(); }));
     }
     protected override void OnPaintBackground(PaintEventArgs e) => Backdrop.Paint(e.Graphics, this, ClientRectangle);
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e); if (previewMode) return;
+        var warm = new System.Windows.Forms.Timer { Interval = 1500 };
+        warm.Tick += (_, _) => { warm.Dispose(); WarmSettings(); }; warm.Start();
+    }
     protected override void OnResizeBegin(EventArgs e) { timer.Stop(); UiMotion.FinishAll(); base.OnResizeBegin(e); }
     protected override void OnResizeEnd(EventArgs e) { base.OnResizeEnd(e); Invalidate(true); if (!previewMode) timer.Start(); }
     protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); PlaceDrawer(false); }

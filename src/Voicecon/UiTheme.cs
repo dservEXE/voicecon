@@ -4,20 +4,18 @@ using System.Drawing.Text;
 namespace Voicecon;
 
 /// <summary>
-/// Neumorphic + liquid-glass palette. Background is the canvas behind everything; Surface is the glass tint
-/// (applied with <see cref="GlassAlpha"/>), Field is the opaque inset colour for inputs and lists.
+/// Neumorphic palette. Background is the matte canvas; Surface is the face of raised cards and controls (the same tone,
+/// so shapes read only through their shadows); Field is the slightly deeper face of inset wells and inputs.
 /// </summary>
 public sealed record ThemePalette(string Id, string Name, bool Dark, Color Background, Color Surface, Color Field,
     Color Border, Color Text, Color Muted, Color Accent, Color AccentInk, Color Danger, Color Glow, Color Online)
 {
-    /// <summary>Opacity of the glass tint over the backdrop.</summary>
-    public int GlassAlpha => Dark ? 18 : 120;
-    /// <summary>Opaque approximation of a glass card, for native controls that cannot be translucent.</summary>
-    public Color GlassSolid => UiTheme.Blend(Background, Surface, GlassAlpha / 255f);
-    public Color ShadowDark => Dark ? Color.FromArgb(150, 0, 0, 0) : Color.FromArgb(70, UiTheme.Blend(Background, Color.FromArgb(60, 30, 50), 0.6f));
-    public Color ShadowLight => Dark ? Color.FromArgb(16, 255, 255, 255) : Color.FromArgb(230, 255, 255, 255);
-    /// <summary>Kept for older call sites: the "surface" colour as an opaque value.</summary>
-    public Color Card => GlassSolid;
+    /// <summary>Shadow cast to the bottom right of raised shapes.</summary>
+    public Color ShadowDark => Color.FromArgb(Dark ? 190 : 90, UiTheme.Blend(Background, Color.Black, 0.72f));
+    /// <summary>Soft light cast to the top left.</summary>
+    public Color ShadowLight => Color.FromArgb(Dark ? 60 : 230, UiTheme.Blend(Background, Color.White, 0.6f));
+    public Color InsetDark => Color.FromArgb(Dark ? 200 : 80, UiTheme.Blend(Field, Color.Black, 0.78f));
+    public Color InsetLight => Color.FromArgb(Dark ? 40 : 200, UiTheme.Blend(Field, Color.White, 0.5f));
 }
 
 public enum MotionLevel { Full, Minimal, Off }
@@ -27,13 +25,13 @@ public static class UiTheme
     private static Color Hex(int value) => Color.FromArgb((value >> 16) & 255, (value >> 8) & 255, value & 255);
     public static readonly ThemePalette[] All =
     [
-        // All variants are dark: neumorphic depth and glass highlights read best on a deep, slightly tinted canvas.
-        new("graphite", "Графит", true, Hex(0x1C2029), Hex(0xFFFFFF), Hex(0x262A33), Hex(0x323849), Hex(0xEEF1F8), Hex(0x99A3B7), Hex(0x8FA7FF), Hex(0x0F1630), Hex(0xFF7D8C), Hex(0xB48CFF), Hex(0x5DD39E)),
-        new("midnight", "Полночь", true, Hex(0x141B2B), Hex(0xE6F4FF), Hex(0x1E2638), Hex(0x2A3550), Hex(0xEAF3FF), Hex(0x8FA0BC), Hex(0x6FD3FF), Hex(0x06202E), Hex(0xFF7F92), Hex(0x5B7CFF), Hex(0x5EE0B0)),
-        new("amethyst", "Аметист", true, Hex(0x1F1A2B), Hex(0xF4EAFF), Hex(0x29233A), Hex(0x3A3150), Hex(0xF3EEFB), Hex(0xA79CBD), Hex(0xC59BFF), Hex(0x221236), Hex(0xFF84A0), Hex(0xFF8AD8), Hex(0x6FDDB0)),
-        new("sage", "Изумруд", true, Hex(0x18211C), Hex(0xE8FFF0), Hex(0x212A25), Hex(0x2D3C33), Hex(0xEAF4EC), Hex(0x9EB3A4), Hex(0x8FDCAA), Hex(0x0E2418), Hex(0xF09A9C), Hex(0x5FC6C1), Hex(0x7BE0A0)),
-        new("gold", "Янтарь", true, Hex(0x1D1912), Hex(0xFFF2D6), Hex(0x2A241C), Hex(0x3E3525), Hex(0xFFF4DA), Hex(0xBAAB88), Hex(0xFFC857), Hex(0x241800), Hex(0xFF8F7A), Hex(0xFF8447), Hex(0x8BD48A)),
-        new("rose", "Гранат", true, Hex(0x241A20), Hex(0xFFE8F0), Hex(0x2E232A), Hex(0x42303B), Hex(0xF8ECF1), Hex(0xBEA4AF), Hex(0xF2A7BA), Hex(0x351A23), Hex(0xFF8C9C), Hex(0xA98BFF), Hex(0x74D6A4))
+        // Dark matte canvases, light enough for both shadows of the neumorphic pair to read.
+        new("graphite", "Графит", true, Hex(0x2A2D34), Hex(0x2A2D34), Hex(0x24272D), Hex(0x3A3F4A), Hex(0xE9ECF3), Hex(0x959CAB), Hex(0x8FA7FF), Hex(0x111833), Hex(0xFF7D8C), Hex(0xB48CFF), Hex(0x5DD39E)),
+        new("midnight", "Полночь", true, Hex(0x232A3A), Hex(0x232A3A), Hex(0x1E2432), Hex(0x343E55), Hex(0xE8F0FC), Hex(0x8E9BB4), Hex(0x6FD3FF), Hex(0x06202E), Hex(0xFF7F92), Hex(0x5B7CFF), Hex(0x5EE0B0)),
+        new("amethyst", "Аметист", true, Hex(0x2D2738), Hex(0x2D2738), Hex(0x272130), Hex(0x403753), Hex(0xF1ECF9), Hex(0xA69BBA), Hex(0xC59BFF), Hex(0x221236), Hex(0xFF84A0), Hex(0xFF8AD8), Hex(0x6FDDB0)),
+        new("sage", "Изумруд", true, Hex(0x27302B), Hex(0x27302B), Hex(0x212924), Hex(0x37443C), Hex(0xE9F3EB), Hex(0x9AAE9F), Hex(0x8FDCAA), Hex(0x0E2418), Hex(0xF09A9C), Hex(0x5FC6C1), Hex(0x7BE0A0)),
+        new("gold", "Янтарь", true, Hex(0x2F2B23), Hex(0x2F2B23), Hex(0x28251E), Hex(0x463F31), Hex(0xFBF2DE), Hex(0xB5A88A), Hex(0xFFC857), Hex(0x241800), Hex(0xFF8F7A), Hex(0xFF8447), Hex(0x8BD48A)),
+        new("rose", "Гранат", true, Hex(0x322930), Hex(0x322930), Hex(0x2B2329), Hex(0x4A3A45), Hex(0xF7EBF0), Hex(0xBAA2AD), Hex(0xF2A7BA), Hex(0x351A23), Hex(0xFF8C9C), Hex(0xA98BFF), Hex(0x74D6A4))
     ];
     public static ThemePalette Current { get; private set; } = All[0];
     public static void Select(string? id) => Current = All.FirstOrDefault(t => t.Id == id) ?? All[0];

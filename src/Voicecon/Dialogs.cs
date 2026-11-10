@@ -82,7 +82,7 @@ internal static class Dialogs
     public static UiLabel Label(string text, Font? font = null, bool muted = true) => new() { Text = text, Font = font ?? UiTheme.Caption, ForeColor = muted ? UiTheme.Current.Muted : UiTheme.Current.Text, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true };
     public static SurfacePanel Input(TextBox input, bool multiline)
     {
-        var surface = new SurfacePanel { Recessed = true, Radius = multiline ? 16 : 12, Padding = new Padding(12, multiline ? 9 : 10, 10, 5), Dock = DockStyle.Fill };
+        var surface = new SurfacePanel { Recessed = true, Radius = multiline ? 18 : 14, Padding = new Padding(14, multiline ? 11 : 11, 12, 6), Dock = DockStyle.Fill };
         input.BorderStyle = BorderStyle.None; input.Dock = DockStyle.Fill; input.Margin = Padding.Empty; surface.Controls.Add(input); return surface;
     }
 }

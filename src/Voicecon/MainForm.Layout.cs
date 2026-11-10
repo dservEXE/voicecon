@@ -35,33 +35,34 @@ public sealed partial class MainForm
         DoubleBuffered = true; SetStyle(ControlStyles.ResizeRedraw | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
         ClientSize = new Size(1200, 790); MinimumSize = new Size(980, 660); StartPosition = FormStartPosition.CenterScreen;
         if (!previewMode && Screen.PrimaryScreen is { } screen) ClientSize = new Size(Math.Min(1200, screen.WorkingArea.Width - 32), Math.Min(790, screen.WorkingArea.Height - 64));
-        var root = Columns(312, 10, -1); root.Padding = new Padding(12, 12, 12, 10); Controls.Add(root);
+        // Cards carry their own shadow gutters, so the grid itself needs almost no spacing.
+        var root = Columns(324, -1); root.Padding = new Padding(6, 6, 6, 4); Controls.Add(root);
         root.Controls.Add(BuildSidebar(), 0, 0);
-        mainHost.Dock = DockStyle.Fill; mainHost.Margin = Padding.Empty; mainHost.Controls.Add(BuildMain()); root.Controls.Add(mainHost, 2, 0);
+        mainHost.Dock = DockStyle.Fill; mainHost.Margin = Padding.Empty; mainHost.Controls.Add(BuildMain()); root.Controls.Add(mainHost, 1, 0);
         BuildSettingsDrawer();
         ResumeLayout(true);
     }
 
     private Control BuildSidebar()
     {
-        var card = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(12, 12, 12, 10) };
+        var card = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(10, 10, 10, 8) };
         var grid = Grid(1); card.Controls.Add(grid);
-        var brand = Columns(42, -1, 44);
-        brand.Controls.Add(new BrandMark { Dock = DockStyle.Fill, Margin = new Padding(0, 2, 2, 2) }, 0, 0);
+        var brand = Columns(46, -1, 46);
+        brand.Controls.Add(new BrandMark { Dock = DockStyle.Fill, Margin = Padding.Empty }, 0, 0);
         var title = TextLabel("voicecon", 15, TextTone.Normal, true); title.Padding = new Padding(6, 0, 0, 2); brand.Controls.Add(title, 1, 0);
         PrepareButton(settingsButton, "", UiIcon.Gear, ButtonTone.Quiet); settingsButton.Circle = true; settingsButton.AccessibleName = "Настройки"; tips.SetToolTip(settingsButton, "Настройки");
-        brand.Controls.Add(settingsButton, 2, 0); AddRow(grid, brand, 44);
+        brand.Controls.Add(settingsButton, 2, 0); AddRow(grid, brand, 46);
         AddRow(grid, Space(), 10);
-        var people = Columns(-1, 52);
+        var people = Columns(-1, 56);
         var contactsTitle = Grid(1); AddRow(contactsTitle, TextLabel("Контакты", 12, TextTone.Normal, true), 26); AddRow(contactsTitle, TextLabel("Друзья и группы", 8.5f, TextTone.Muted), 20);
         people.Controls.Add(contactsTitle, 0, 0);
         PrepareButton(addFriend, "", UiIcon.Plus, ButtonTone.Primary); addFriend.Circle = true; addFriend.AccessibleName = "Добавить друга по коду"; tips.SetToolTip(addFriend, "Добавить друга по коду");
-        people.Controls.Add(addFriend, 1, 0); AddRow(grid, people, 50);
+        people.Controls.Add(addFriend, 1, 0); AddRow(grid, people, 54);
         AddRow(grid, Space(), 8);
         contactHost.Dock = DockStyle.Fill; contactHost.Margin = Padding.Empty; contactHost.SetContent(contactList);
         AddRow(grid, contactHost, 0); grid.RowStyles[^1].SizeType = SizeType.Percent; grid.RowStyles[^1].Height = 100;
         AddRow(grid, Divider(), 9);
-        var self = Columns(-1, 42); selfCard.Dock = DockStyle.Fill; self.Controls.Add(selfCard, 0, 0);
+        var self = Columns(-1, 46); selfCard.Dock = DockStyle.Fill; self.Controls.Add(selfCard, 0, 0);
         PrepareButton(ownCard, "", UiIcon.Copy, ButtonTone.Quiet); ownCard.Circle = true; ownCard.AccessibleName = "Скопировать мой код друга"; tips.SetToolTip(ownCard, "Скопировать мой код друга");
         self.Controls.Add(ownCard, 1, 0); AddRow(grid, self, 52);
         return card;
@@ -73,32 +74,32 @@ public sealed partial class MainForm
         AddRow(grid, BuildUpdateBanner(), 0); updateBannerRow = grid.RowStyles[^1];
         BuildIncomingPanel(); AddRow(grid, incomingPanel, 0); incomingRow = grid.RowStyles[^1]; incomingPanel.Visible = false;
 
-        var headerCard = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(16, 8, 12, 8) };
+        var headerCard = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(12, 6, 10, 6) };
         headerGrid = Columns(-1, 470); headerCard.Controls.Add(headerGrid);
         header.Dock = DockStyle.Fill; headerGrid.Controls.Add(header, 0, 0);
-        actions.FlowDirection = FlowDirection.RightToLeft; actions.WrapContents = false; actions.Dock = DockStyle.Fill; actions.Padding = new Padding(0, 13, 0, 0); actions.Margin = Padding.Empty;
-        PrepareButton(endButton, "Завершить звонок", UiIcon.HangUp, ButtonTone.Danger); endButton.Size = new Size(184, 48); endButton.Radius = 24;
-        PrepareButton(callButton, "Позвонить", UiIcon.Phone, ButtonTone.Primary); callButton.Size = new Size(176, 48); callButton.Radius = 24;
-        PrepareButton(shareButton, "Демо / камера", UiIcon.Screen, ButtonTone.Secondary); shareButton.Size = new Size(176, 48); shareButton.Radius = 24;
-        PrepareButton(inviteButton, "", UiIcon.PersonAdd, ButtonTone.Secondary); inviteButton.Circle = true; inviteButton.Size = new Size(48, 48); inviteButton.AccessibleName = "Пригласить в звонок"; tips.SetToolTip(inviteButton, "Пригласить друга в этот звонок");
-        foreach (var button in new[] { endButton, callButton, shareButton, inviteButton }) { button.Dock = DockStyle.None; button.Margin = new Padding(8, 0, 0, 0); actions.Controls.Add(button); }
+        actions.FlowDirection = FlowDirection.RightToLeft; actions.WrapContents = false; actions.Dock = DockStyle.Fill; actions.Padding = new Padding(0, 5, 0, 0); actions.Margin = Padding.Empty;
+        PrepareButton(endButton, "Завершить звонок", UiIcon.HangUp, ButtonTone.Danger); endButton.Size = new Size(196, 54); endButton.Radius = 24;
+        PrepareButton(callButton, "Позвонить", UiIcon.Phone, ButtonTone.Primary); callButton.Size = new Size(184, 54); callButton.Radius = 24;
+        PrepareButton(shareButton, "Демо / камера", UiIcon.Screen, ButtonTone.Secondary); shareButton.Size = new Size(190, 54); shareButton.Radius = 24;
+        PrepareButton(inviteButton, "", UiIcon.PersonAdd, ButtonTone.Secondary); inviteButton.Circle = true; inviteButton.Size = new Size(54, 54); inviteButton.AccessibleName = "Пригласить в звонок"; tips.SetToolTip(inviteButton, "Пригласить друга в этот звонок");
+        foreach (var button in new[] { endButton, callButton, shareButton, inviteButton }) { button.Dock = DockStyle.None; button.Margin = new Padding(4, 0, 0, 0); actions.Controls.Add(button); }
         tips.SetToolTip(endButton, "Завершить звонок для себя"); tips.SetToolTip(shareButton, "Показать экран, окно или камеру участникам");
         headerGrid.Controls.Add(actions, 1, 0);
-        AddRow(grid, headerCard, 92);
+        AddRow(grid, headerCard, 104);
 
-        callStrip.Dock = DockStyle.Fill; callStrip.Margin = new Padding(6, 0, 6, 0);
-        var stripHost = new BackdropPanel { Dock = DockStyle.Fill, Padding = new Padding(8, 2, 8, 0) }; stripHost.Controls.Add(callStrip);
+        callStrip.Dock = DockStyle.Fill; callStrip.Margin = Padding.Empty;
+        var stripHost = new BackdropPanel { Dock = DockStyle.Fill, Padding = new Padding(6, 0, 6, 0) }; stripHost.Controls.Add(callStrip);
         AddRow(grid, stripHost, 0); stripRow = grid.RowStyles[^1];
 
         AddRow(grid, BuildChatCard(), 0); grid.RowStyles[^1].SizeType = SizeType.Percent; grid.RowStyles[^1].Height = 100;
-        AddRow(grid, BuildBottomBar(), 70);
+        AddRow(grid, BuildBottomBar(), 86);
         return grid;
     }
 
     private void BuildIncomingPanel()
     {
-        incomingPanel.Dock = DockStyle.Fill; incomingPanel.Padding = new Padding(18, 8, 12, 8);
-        var row = Columns(-1, 150, 8, 150);
+        incomingPanel.Dock = DockStyle.Fill; incomingPanel.Padding = new Padding(16, 6, 10, 6);
+        var row = Columns(-1, 160, 4, 160);
         var text = Grid(1); AddRow(text, TextLabel("ВХОДЯЩИЙ ЗВОНОК", 8, TextTone.Accent, true), 22);
         PrepareLabel(incomingTitle); incomingTitle.Font = UiTheme.Heading; AddRow(text, incomingTitle, 30);
         PrepareButton(acceptCall, "Принять", UiIcon.Phone, ButtonTone.Primary); acceptCall.Radius = 22;
@@ -129,7 +130,7 @@ public sealed partial class MainForm
 
     private Control BuildChatCard()
     {
-        var card = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(16, 12, 16, 14) }; var grid = Grid(1); card.Controls.Add(grid);
+        var card = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(14, 10, 14, 10) }; var grid = Grid(1); card.Controls.Add(grid);
         var top = Columns(-1, 170);
         var titles = Grid(1); AddRow(titles, TextLabel("Чат", 12, TextTone.Normal, true), 24); AddRow(titles, TextLabel("История хранится только на ПК участников · до 300 МБ", 8.5f, TextTone.Muted), 18);
         top.Controls.Add(titles, 0, 0);
@@ -138,19 +139,19 @@ public sealed partial class MainForm
         chatHost.Dock = DockStyle.Fill; chatHost.Margin = Padding.Empty; chatHost.SetContent(chatView);
         AddRow(grid, chatHost, 0); grid.RowStyles[^1].SizeType = SizeType.Percent; grid.RowStyles[^1].Height = 100;
         AddRow(grid, Space(), 10);
-        var composer = Columns(48, 8, -1, 8, 48);
+        var composer = Columns(54, 6, -1, 6, 54);
         PrepareButton(emoji, "", UiIcon.Smile, ButtonTone.Quiet); emoji.Circle = true; emoji.AccessibleName = "Эмодзи"; tips.SetToolTip(emoji, "Эмодзи");
         chatInput.Multiline = true; chatInput.MaxLength = 2000; chatInput.Font = UiTheme.Body;
         PrepareButton(sendChat, "", UiIcon.Send, ButtonTone.Primary); sendChat.Circle = true; sendChat.AccessibleName = "Отправить"; tips.SetToolTip(sendChat, "Отправить · Enter");
         composer.Controls.Add(emoji, 0, 0); composer.Controls.Add(InputSurface(chatInput, true), 2, 0); composer.Controls.Add(sendChat, 4, 0);
-        AddRow(grid, composer, 52);
+        AddRow(grid, composer, 54);
         return card;
     }
 
     private Control BuildBottomBar()
     {
-        var bar = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(10, 6, 10, 6), Elevation = 0.7f };
-        var row = Columns(372, 8, 136, 12, -1, 8, 52, 4, 52);
+        var bar = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(8, 4, 8, 4), Elevation = 0.8f };
+        var row = Columns(350, 6, 140, 8, -1, 6, 54, 2, 54);
         modePicker.Options.Add(new("Обычный", "24 кбит/с", "Лучшее качество голоса"));
         modePicker.Options.Add(new("Игровой", "16 кбит/с", "Меньше нагрузки на сеть во время игры"));
         modePicker.Options.Add(new("Эконом", "8 кбит/с", "Минимальный трафик"));
@@ -216,7 +217,7 @@ public sealed partial class MainForm
     // ---------------- helpers ----------------
     private static TableLayoutPanel Grid(int columns, Padding? padding = null)
     {
-        var grid = new BufferedGrid { Dock = DockStyle.Fill, ColumnCount = columns, RowCount = columns > 1 ? 1 : 0, BackColor = UiTheme.Current.GlassSolid, Padding = padding ?? Padding.Empty, Margin = Padding.Empty };
+        var grid = new BufferedGrid { Dock = DockStyle.Fill, ColumnCount = columns, RowCount = columns > 1 ? 1 : 0, BackColor = UiTheme.Current.Surface, Padding = padding ?? Padding.Empty, Margin = Padding.Empty };
         if (columns > 1) grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); else grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); return grid;
     }
     private static TableLayoutPanel Columns(params int[] widths)
@@ -238,7 +239,7 @@ public sealed partial class MainForm
     private static void SetupToggle(ToggleRow toggle, string text, string description, bool value) { toggle.Text = text; toggle.Description = description; toggle.Checked = value; }
     private static SurfacePanel InputSurface(TextBox input, bool multiline)
     {
-        var surface = new SurfacePanel { Recessed = true, Radius = multiline ? 18 : 12, Padding = new Padding(14, multiline ? 9 : 9, 12, 5), Dock = DockStyle.Fill };
+        var surface = new SurfacePanel { Recessed = true, Radius = multiline ? 20 : 14, Padding = new Padding(16, multiline ? 12 : 11, 14, 6), Dock = DockStyle.Fill };
         input.BorderStyle = BorderStyle.None; input.Dock = DockStyle.Fill; input.Margin = Padding.Empty; input.ScrollBars = ScrollBars.None; surface.Controls.Add(input); return surface;
     }
 
@@ -263,7 +264,6 @@ public sealed partial class MainForm
             ApplyTitleBar(); LoadHistory();
             var old = ownedIcon; ownedIcon = BrandIcon.Create(); Icon = ownedIcon; if (tray is not null) { tray.Icon = ownedIcon; if (tray.ContextMenuStrip is { } menu) { menu.BackColor = ThemeMenuRenderer.MenuBack; menu.ForeColor = t.Text; foreach (ToolStripItem item in menu.Items) item.ForeColor = t.Text; } } old?.Dispose();
             foreach (var view in streamWindows.Values) { var window = view.Window; WindowTheme.Apply(window); Backdrop.Invalidate(window); UiPainting.ApplyBackgrounds(window); window.Invalidate(true); }
-            settingsDrawer.Wash = Color.FromArgb(205, t.Background);
         }
         Invalidate(true); applyingTheme = false;
     }
@@ -275,16 +275,21 @@ public sealed partial class MainForm
     private void ApplyTitleBar() => WindowTheme.Apply(this);
 }
 
-/// <summary>Hairline separator with a soft fade at both ends.</summary>
+/// <summary>Engraved separator: a dark groove with a light lip under it, fading out at both ends.</summary>
 public sealed class DividerLine : Control
 {
-    public DividerLine() { SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque | ControlStyles.ResizeRedraw, true); BackColor = UiTheme.Current.GlassSolid; Margin = Padding.Empty; }
+    public DividerLine() { SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque | ControlStyles.ResizeRedraw, true); BackColor = UiTheme.Current.Surface; Margin = Padding.Empty; }
     protected override void OnPaint(PaintEventArgs e)
     {
         Backdrop.Paint(e.Graphics, this, ClientRectangle);
-        if (Width < 4) return; var y = Height / 2f;
-        using var brush = new System.Drawing.Drawing2D.LinearGradientBrush(new PointF(0, y), new PointF(Width, y), Color.FromArgb(0, 255, 255, 255), Color.FromArgb(0, 255, 255, 255));
-        brush.InterpolationColors = new System.Drawing.Drawing2D.ColorBlend { Colors = [Color.FromArgb(0, 255, 255, 255), Color.FromArgb(28, 255, 255, 255), Color.FromArgb(0, 255, 255, 255)], Positions = [0f, 0.5f, 1f] };
-        using var pen = new Pen(brush, 1); e.Graphics.DrawLine(pen, 0, y, Width, y);
+        if (Width < 4) return; var y = (int)(Height / 2f);
+        void Line(Color color, int offset)
+        {
+            using var brush = new System.Drawing.Drawing2D.LinearGradientBrush(new PointF(0, y), new PointF(Width, y), Color.Transparent, Color.Transparent);
+            brush.InterpolationColors = new System.Drawing.Drawing2D.ColorBlend { Colors = [Color.FromArgb(0, color), color, color, Color.FromArgb(0, color)], Positions = [0f, 0.12f, 0.88f, 1f] };
+            using var pen = new Pen(brush, 1); e.Graphics.DrawLine(pen, 0, y + offset, Width, y + offset);
+        }
+        Line(Color.FromArgb(150, UiTheme.Blend(Backdrop.Behind(this), Color.Black, 0.55f)), 0);
+        Line(Color.FromArgb(60, 255, 255, 255), 1);
     }
 }

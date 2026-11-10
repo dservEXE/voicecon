@@ -78,6 +78,35 @@ internal static class UiPaintChecks
         }
         Console.WriteLine($"OFFSCREEN resize: layout avg {layout.Average():F2} ms, max {layout.Max():F2} ms; full bitmap paint avg {paint.Average():F2} ms, max {paint.Max():F2} ms; 12 measured frames, no visible window.");
     }
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool RedrawWindow(IntPtr hwnd, IntPtr rect, IntPtr region, uint flags);
+    /// <summary>Opt-in (shows a real window briefly): real settings slides, timed frame by frame on the vsync clock.</summary>
+    public static void MotionBenchmark()
+    {
+        using var form = new MainForm(true, "graphite") { StartPosition = FormStartPosition.Manual, Location = new Point(60, 60) };
+        UiMotion.AssumeActive = true; UiMotion.Level = MotionLevel.Full; form.Show(); form.Activate(); form.Refresh(); Application.DoEvents();
+        var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        var progress = typeof(MainForm).GetField("drawerProgress", flags)!;
+        if (!UiMotion.WillAnimate(form)) { Console.WriteLine($"MOTION skipped: visible {form.Visible}, level {UiMotion.Level}"); return; }
+        var host = (Control)typeof(MainForm).GetField("mainHost", flags)!.GetValue(form)!;
+        using (var shot = SlideOverlay.FromScreen(host)) shot.Save(Path.GetFullPath("artifacts/previews/slide-snapshot.png"));
+        typeof(MainForm).GetMethod("WarmSettings", flags)!.Invoke(form, []);
+        var intervals = new List<double>(); var starts = new List<double>();
+        foreach (var name in new[] { "OpenSettings", "CloseSettings", "OpenSettings", "CloseSettings" })
+        {
+            var clock = Stopwatch.StartNew(); typeof(MainForm).GetMethod(name, flags)!.Invoke(form, []); starts.Add(clock.Elapsed.TotalMilliseconds);
+            var last = (float)progress.GetValue(form)!; var lastTime = clock.Elapsed.TotalMilliseconds; var first = true;
+            while (!UiMotion.IsIdle && clock.ElapsedMilliseconds < 2000)
+            {
+                Application.DoEvents();
+                var now = (float)progress.GetValue(form)!;
+                if (now != last) { var t = clock.Elapsed.TotalMilliseconds; if (!first) intervals.Add(t - lastTime); first = false; lastTime = t; last = now; }
+                else Thread.Sleep(0);
+            }
+            Application.DoEvents(); form.Refresh();
+        }
+        form.Hide(); intervals.Sort();
+        Console.WriteLine($"MOTION settings slide: {intervals.Count} frames over 4 slides, median interval {intervals[intervals.Count / 2]:F2} ms, p95 {intervals[(int)(intervals.Count * 0.95)]:F2} ms, max {intervals[^1]:F2} ms; snapshot before slide {string.Join(" / ", starts.Select(v => v.ToString("F0")))} ms");
+    }
     private static void Prepare(Control control)
     {
         _ = control.Handle; control.PerformLayout();

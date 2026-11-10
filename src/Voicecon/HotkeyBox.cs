@@ -10,7 +10,7 @@ public sealed class HotkeyBox : Control
     [Browsable(false)] public bool Capturing => capturing;
     public HotkeyBox()
     {
-        SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.ResizeRedraw | ControlStyles.Opaque, true); BackColor = UiTheme.Current.GlassSolid;
+        SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.ResizeRedraw | ControlStyles.Opaque, true); BackColor = UiTheme.Current.Surface;
         Cursor = Cursors.Hand; TabStop = true; pulse.Tick += (_, _) => Invalidate();
         var menu = ThemeMenuRenderer.CreateMenu();
         menu.Items.Add("Убрать назначение", null, (_, _) => { CancelCapture(); Chord = Keys.None; Captured?.Invoke(this, EventArgs.Empty); }); ContextMenuStrip = menu;
@@ -48,9 +48,9 @@ public sealed class HotkeyBox : Control
     {
         var t = UiTheme.Current; Backdrop.Paint(e.Graphics, this, ClientRectangle); var s = DeviceDpi / 96f;
         var p = capturing ? (float)(0.5 + 0.5 * Math.Sin((Environment.TickCount64 - started) / 180.0)) : 0;
-        var shape = new RectangleF(1.5f, 1.5f, Width - 3, Height - 3);
+        var shape = new RectangleF(2 * s, 2 * s, Width - 4 * s, Height - 4 * s);
         var radius = Math.Min(14 * s, shape.Height / 2);
-        Glass.Pill(e.Graphics, shape, radius, s, capturing ? Color.FromArgb((int)(40 + 40 * p), t.Accent) : Color.FromArgb(18, 255, 255, 255), 0, 0, 0.8f);
+        Neu.Inset(e.Graphics, shape, radius, s, 0.7f, capturing ? UiTheme.Blend(t.Field, t.Accent, 0.12f + 0.12f * p) : t.Field);
         if (capturing || Focused) { using var path = UiTheme.Rounded(shape, radius); using var pen = new Pen(UiTheme.WithAlpha(t.Accent, capturing ? (int)(110 + 120 * p) : 150), 1.2f * s); e.Graphics.DrawPath(pen, path); }
         var text = capturing ? "Нажмите клавишу · Esc — отмена" : chord == Keys.None ? "Не назначено" : Format(chord);
         var color = capturing ? t.Accent : chord == Keys.None ? UiTheme.WithAlpha(t.Muted, 170) : t.Text;

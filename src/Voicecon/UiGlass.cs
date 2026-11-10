@@ -1,226 +1,115 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
-using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Voicecon;
 
-/// <summary>A container whose interior is tinted glass (or an opaque field). Children paint the same material behind them.</summary>
-public interface IGlassLayer
+/// <summary>A container with an opaque face colour. Children paint exactly that colour behind themselves, so nothing shows seams.</summary>
+public interface ISurface
 {
-    Color LayerTint { get; }
-    /// <summary>True for glass: what is behind it is shown blurred and a little brighter (frosted), like Apple's materials.</summary>
-    bool Frosted => false;
+    Color Face { get; }
 }
 
 /// <summary>
-/// The window "wallpaper": a deep base with soft pools of colour. Two versions are cached per form size and theme:
-/// the clear one, and a frosted one (much blurrier, slightly brighter and more saturated) that glass shows.
-/// Both are rendered at low resolution and upscaled, so they cost nothing while idle.
+/// The window canvas is one flat colour (neumorphism needs a matte surface). Every control paints the face of the nearest
+/// <see cref="ISurface"/> ancestor, so backgrounds never depend on position: moving a panel only copies pixels, which keeps
+/// slides and scrolls cheap and free of trails.
 /// </summary>
 public static class Backdrop
 {
-    private sealed class Entry { public Bitmap? Clear, Frosted; public string Key = ""; }
-    private static readonly ConditionalWeakTable<Form, Entry> cache = new();
-
-    public static void Paint(Graphics graphics, Control control, Rectangle area, bool? frosted = null)
+    public static Color Behind(Control control)
     {
-        var t = UiTheme.Current;
-        var layers = new List<IGlassLayer>(4);
-        Form? form = null; var x = 0; var y = 0;
-        for (var current = control; current is not null; current = current.Parent)
-        {
-            if (current is Form f) { form = f; break; }
-            if (current != control && current is IGlassLayer layer) layers.Add(layer);
-            x += current.Left; y += current.Top;
-        }
-        var opaque = layers.FindIndex(l => l.LayerTint.A == 255);
-        if (opaque >= 0)
-        {
-            using var fill = new SolidBrush(layers[opaque].LayerTint); graphics.FillRectangle(fill, area);
-            for (var i = opaque - 1; i >= 0; i--) { using var tint = new SolidBrush(layers[i].LayerTint); graphics.FillRectangle(tint, area); }
-            return;
-        }
-        using (var bg = new SolidBrush(t.Background)) graphics.FillRectangle(bg, area);
-        if (form is not null && form.ClientSize.Width > 1 && form.ClientSize.Height > 1)
-        {
-            var useFrosted = frosted ?? layers.Any(l => l.Frosted);
-            var image = For(form, useFrosted);
-            var source = new Rectangle(area.X + x, area.Y + y, area.Width, area.Height);
-            source.Intersect(new Rectangle(Point.Empty, image.Size));
-            if (source.Width > 0 && source.Height > 0)
-            {
-                var target = new Rectangle(source.X - x, source.Y - y, source.Width, source.Height);
-                var oldInterpolation = graphics.InterpolationMode;
-                graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
-                graphics.DrawImage(image, target, source, GraphicsUnit.Pixel);
-                graphics.InterpolationMode = oldInterpolation;
-            }
-        }
-        for (var i = layers.Count - 1; i >= 0; i--) { using var tint = new SolidBrush(layers[i].LayerTint); graphics.FillRectangle(tint, area); }
+        for (var current = control.Parent; current is not null; current = current.Parent)
+            if (current is ISurface surface) return surface.Face;
+        return UiTheme.Current.Background;
     }
-
-    /// <summary>Colour approximately behind a control, for native children that need an opaque BackColor.</summary>
-    public static Color Approximate(Control control)
+    public static void Paint(Graphics graphics, Control control, Rectangle area)
     {
-        var t = UiTheme.Current; var color = UiTheme.Blend(t.Background, t.Accent, 0.06f);
-        var layers = new List<Color>();
-        for (var current = control; current is not null and not Form; current = current.Parent) if (current is IGlassLayer layer) layers.Add(layer.LayerTint);
-        for (var i = layers.Count - 1; i >= 0; i--) color = UiTheme.Blend(color, layers[i], layers[i].A / 255f);
-        return color;
+        using var fill = new SolidBrush(Behind(control)); graphics.FillRectangle(fill, area);
     }
-
-    public static void Invalidate(Form form) { if (cache.TryGetValue(form, out var entry)) { entry.Clear?.Dispose(); entry.Frosted?.Dispose(); entry.Clear = entry.Frosted = null; entry.Key = ""; } }
-
-    private static Bitmap For(Form form, bool frosted)
-    {
-        var entry = cache.GetOrCreateValue(form); var t = UiTheme.Current; var size = form.ClientSize;
-        var key = $"{size.Width}x{size.Height}:{t.Background.ToArgb()}:{t.Accent.ToArgb()}:{t.Glow.ToArgb()}";
-        if (entry.Key != key || entry.Clear is null || entry.Frosted is null)
-        {
-            entry.Clear?.Dispose(); entry.Frosted?.Dispose();
-            entry.Clear = Render(size, t, false); entry.Frosted = Render(size, t, true); entry.Key = key;
-        }
-        return frosted ? entry.Frosted : entry.Clear;
-    }
-
-    public static Bitmap Render(Size size, ThemePalette t, bool frosted = false)
-    {
-        // Frosted glass = the same wallpaper seen through a much blurrier, brighter, more saturated lens.
-        var divisor = frosted ? 14 : 4;
-        var small = new Size(Math.Max(6, size.Width / divisor), Math.Max(6, size.Height / divisor));
-        using var low = new Bitmap(small.Width, small.Height, PixelFormat.Format32bppPArgb);
-        using (var g = Graphics.FromImage(low))
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var baseFill = new LinearGradientBrush(new Rectangle(Point.Empty, small), UiTheme.Blend(t.Background, Color.White, 0.03f), UiTheme.Blend(t.Background, Color.Black, 0.28f), 80f))
-                g.FillRectangle(baseFill, 0, 0, small.Width, small.Height);
-            var span = Math.Max(small.Width, small.Height);
-            void Pool(float cx, float cy, float radius, Color color, int alpha)
-            {
-                var r = span * radius; var rect = new RectangleF(small.Width * cx - r, small.Height * cy - r, r * 2, r * 2);
-                using var path = new GraphicsPath(); path.AddEllipse(rect);
-                using var brush = new PathGradientBrush(path) { CenterColor = Color.FromArgb(alpha, color), SurroundColors = [Color.FromArgb(0, color)] };
-                brush.Blend = new Blend { Factors = [0f, 0.3f, 0.72f, 1f], Positions = [0f, 0.4f, 0.75f, 1f] };
-                g.FillEllipse(brush, rect);
-            }
-            Pool(0.04f, 0.02f, 0.62f, t.Accent, 95);
-            Pool(0.98f, 0.98f, 0.70f, t.Glow, 88);
-            Pool(0.62f, 0.12f, 0.36f, UiTheme.Blend(t.Accent, t.Glow, 0.5f), 52);
-            Pool(0.18f, 1.02f, 0.44f, t.Glow, 46);
-            Pool(0.84f, 0.46f, 0.24f, t.Accent, 30);
-        }
-        var image = new Bitmap(Math.Max(1, size.Width), Math.Max(1, size.Height), PixelFormat.Format32bppPArgb);
-        using (var g = Graphics.FromImage(image))
-        {
-            g.InterpolationMode = InterpolationMode.HighQualityBilinear; g.PixelOffsetMode = PixelOffsetMode.Half;
-            using var attributes = new ImageAttributes(); attributes.SetWrapMode(WrapMode.TileFlipXY);
-            if (frosted)
-            {
-                // Vibrancy: +25% saturation, a lift in brightness.
-                const float s = 1.25f, lr = 0.2126f, lg = 0.7152f, lb = 0.0722f, lift = 0.05f;
-                attributes.SetColorMatrix(new ColorMatrix(
-                [
-                    [lr * (1 - s) + s, lr * (1 - s), lr * (1 - s), 0, 0],
-                    [lg * (1 - s), lg * (1 - s) + s, lg * (1 - s), 0, 0],
-                    [lb * (1 - s), lb * (1 - s), lb * (1 - s) + s, 0, 0],
-                    [0, 0, 0, 1, 0],
-                    [lift, lift, lift, 0, 1],
-                ]));
-            }
-            g.DrawImage(low, new Rectangle(Point.Empty, image.Size), 0, 0, small.Width, small.Height, GraphicsUnit.Pixel, attributes);
-        }
-        return image;
-    }
+    /// <summary>Opaque colour behind a control, for native children (text boxes, labels) that need a BackColor.</summary>
+    public static Color Approximate(Control control) => control is ISurface surface ? surface.Face : Behind(control);
+    /// <summary>Kept for theme switches: there is nothing cached per window any more.</summary>
+    public static void Invalidate(Form form) { }
 }
 
-/// <summary>Apple-style liquid glass primitives: flat translucent shapes, luminous edges, soft ambient shadows. No bevels, no gloss.</summary>
-public static class Glass
+/// <summary>
+/// Neumorphic primitives: raised shapes cast a dark shadow to the bottom right and a soft light one to the top left;
+/// inset wells carry the same pair inside. Shadows are real blurs, rendered once per shape class and drawn as nine slices,
+/// so painting costs a handful of bitmap copies and never re-blurs.
+/// </summary>
+public static class Neu
 {
-    public static void Shadow(Graphics g, RectangleF r, float radius, float dx, float dy, float blur, Color color)
+    private const float RaisedOffset = 4f, RaisedBlur = 10f, InsetOffset = 2.5f, InsetBlur = 6f;
+    public const float CardDepth = 1f, ButtonDepth = 0.4f, ChipDepth = 0.45f, SmallDepth = 0.3f;
+
+    /// <summary>Space a raised shape of this depth needs around it so that its shadow is never clipped.</summary>
+    public static int Extent(float depth, float s) => depth <= 0 ? 0 : (int)Math.Ceiling(Math.Max(1, Math.Round(RaisedOffset * depth * s)) + Math.Max(2, Math.Round(RaisedBlur * depth * s))) + 1;
+
+    /// <summary>A raised shape. <paramref name="convex"/> adds a gentle top-left light to leaf controls (never to containers: their children paint the flat face).</summary>
+    public static void Raised(Graphics g, RectangleF r, float radius, float s, float depth = CardDepth, Color? face = null, float convex = 0, float rim = 1)
     {
-        if (color.A == 0 || r.Width <= 0 || r.Height <= 0) return;
-        var steps = Math.Clamp((int)(blur / 2.5f), 3, 6);
-        for (var i = steps; i >= 1; i--)
+        if (r.Width < 2 || r.Height < 2) return;
+        var t = UiTheme.Current; var color = face ?? t.Surface; radius = Math.Min(radius, Math.Min(r.Width, r.Height) / 2);
+        var offset = (int)Math.Max(1, Math.Round(RaisedOffset * depth * s)); var blur = (int)Math.Max(2, Math.Round(RaisedBlur * depth * s));
+        if (depth > 0.01f && convex <= 0)
         {
-            var grow = blur * i / steps;
-            var alpha = (int)(color.A * (1f - (i - 1f) / steps) / steps * 1.6f);
-            var rect = new RectangleF(r.X + dx - grow / 2, r.Y + dy - grow / 2, r.Width + grow, r.Height + grow);
-            using var path = UiTheme.Rounded(rect, radius + grow / 2);
-            using var brush = new SolidBrush(Color.FromArgb(Math.Clamp(alpha, 0, 255), color));
+            // Flat face: shadows, face and lit edge come from one cached template (a few bitmap copies per paint).
+            Shadows.Raised(g, r, radius, blur, offset, t.ShadowDark, t.ShadowLight, color, rim);
+            return;
+        }
+        if (depth > 0.01f) Shadows.Raised(g, r, radius, blur, offset, t.ShadowDark, t.ShadowLight, null, 0);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using var path = UiTheme.Rounded(r, radius);
+        if (convex > 0)
+        {
+            using var brush = new LinearGradientBrush(RectangleF.Inflate(r, 1, 1), UiTheme.Blend(color, Color.White, 0.07f * convex), UiTheme.Blend(color, Color.Black, 0.10f * convex), 45f);
             g.FillPath(brush, path);
         }
+        else { using var brush = new SolidBrush(color); g.FillPath(brush, path); }
+        if (rim > 0) Rim(g, r, radius, s, rim);
     }
 
-    /// <summary>The luminous liquid edge: a crisp hairline brighter at the top, an inner glow band, and a faint dark outline for separation.</summary>
-    public static void Edge(Graphics g, RectangleF r, float radius, float s, float strength = 1)
+    /// <summary>A pressed-in well: flat face with a dark inner shadow along the top left and a faint light one along the bottom right.</summary>
+    public static void Inset(Graphics g, RectangleF r, float radius, float s, float depth = 1, Color? face = null)
+    {
+        if (r.Width < 2 || r.Height < 2) return;
+        var t = UiTheme.Current; radius = Math.Min(radius, Math.Min(r.Width, r.Height) / 2); var color = face ?? t.Field;
+        if (depth <= 0.01f)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using var path = UiTheme.Rounded(r, radius); using var brush = new SolidBrush(color); g.FillPath(brush, path); return;
+        }
+        var offset = (int)Math.Max(1, Math.Round(InsetOffset * depth * s)); var blur = (int)Math.Max(2, Math.Round(InsetBlur * depth * s));
+        Shadows.Inset(g, r, radius, blur, offset, t.InsetDark, t.InsetLight, color);
+    }
+
+    /// <summary>The thin lit edge of a raised shape: bright along the top and left, gone along the bottom and right.</summary>
+    public static void Rim(Graphics g, RectangleF r, float radius, float s, float strength = 1)
     {
         if (r.Width < 4 || r.Height < 4 || strength <= 0) return;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        int A(float a) => Math.Clamp((int)(a * strength), 0, 255);
-        using (var outline = UiTheme.Rounded(RectangleF.Inflate(r, 0.5f, 0.5f), radius + 0.5f))
-        using (var dark = new Pen(Color.FromArgb(A(55), 0, 0, 0), 1f)) g.DrawPath(dark, outline);
-        using (var glowPath = UiTheme.Rounded(RectangleF.Inflate(r, -1.6f * s, -1.6f * s), Math.Max(1, radius - 1.6f * s)))
-        using (var glowBrush = new LinearGradientBrush(RectangleF.Inflate(r, 1, 1), Color.FromArgb(A(34), 255, 255, 255), Color.FromArgb(A(4), 255, 255, 255), 65f))
-        using (var glow = new Pen(glowBrush, 2.4f * s)) g.DrawPath(glow, glowPath);
-        using (var hairPath = UiTheme.Rounded(new RectangleF(r.X + 0.5f, r.Y + 0.5f, r.Width - 1, r.Height - 1), Math.Max(1, radius - 0.5f)))
-        using (var hairBrush = new LinearGradientBrush(RectangleF.Inflate(r, 1, 1), Color.FromArgb(A(105), 255, 255, 255), Color.FromArgb(A(16), 255, 255, 255), 80f))
-        using (var hair = new Pen(hairBrush, Math.Max(1f, s))) g.DrawPath(hair, hairPath);
+        Shadows.StrokeRim(g, r, radius, Math.Max(1f, s), strength);
     }
 
-    /// <summary>A glass card: frosted interior is painted by the caller; this adds the tint and the edge.</summary>
-    public static void CardShadow(Graphics g, RectangleF r, float radius, float s, float elevation) =>
-        Shadow(g, r, radius, 0, 8 * s * elevation, 26 * s * elevation, Color.FromArgb((int)(80 * elevation), 0, 0, 0));
-
-    /// <summary>Flat capsule/circle: translucent glass (white alpha) or a solid tint, with a liquid edge. Press darkens, hover lifts.</summary>
-    public static void Pill(Graphics g, RectangleF r, float radius, float s, Color fill, float hover = 0, float press = 0, float edge = 1)
+    /// <summary>Accent focus ring just outside a shape.</summary>
+    public static void Focus(Graphics g, RectangleF r, float radius, float s)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using var path = UiTheme.Rounded(r, radius);
-        var top = fill.A == 255 ? UiTheme.Blend(fill, Color.White, 0.08f + hover * 0.08f) : Color.FromArgb(Math.Min(255, fill.A + (int)(hover * 16)), fill);
-        var bottom = fill.A == 255 ? UiTheme.Blend(fill, Color.Black, 0.04f) : Color.FromArgb(Math.Max(0, fill.A - 4 + (int)(hover * 10)), fill);
-        using (var brush = new LinearGradientBrush(RectangleF.Inflate(r, 0, 1), top, bottom, 90f)) g.FillPath(brush, path);
-        if (press > 0.01f) { using var dim = new SolidBrush(Color.FromArgb((int)(42 * press), 0, 0, 0)); g.FillPath(dim, path); }
-        Edge(g, r, radius, s, edge * (fill.A == 255 ? 0.7f : 1f) * (1 + hover * 0.35f));
+        using var path = UiTheme.Rounded(RectangleF.Inflate(r, 1.5f * s, 1.5f * s), radius + 1.5f * s);
+        using var pen = new Pen(UiTheme.WithAlpha(UiTheme.Current.Accent, 170), 1.4f * s); g.DrawPath(pen, path);
     }
 
-    /// <summary>Input / list well: an opaque, slightly darker capsule (native text boxes sit inside it seamlessly).</summary>
-    public static void Field(Graphics g, RectangleF r, float radius, Color fill, float s, float focus = 0)
-    {
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        using var path = UiTheme.Rounded(r, radius);
-        using (var brush = new SolidBrush(fill)) g.FillPath(brush, path);
-        var state = g.Save(); g.SetClip(path, CombineMode.Intersect);
-        using (var top = new LinearGradientBrush(new RectangleF(r.X, r.Y, r.Width, Math.Max(2, 8 * s)), Color.FromArgb(46, 0, 0, 0), Color.FromArgb(0, 0, 0, 0), 90f))
-            g.FillRectangle(top, r.X, r.Y, r.Width, 8 * s);
-        g.Restore(state);
-        using (var edge = UiTheme.Rounded(new RectangleF(r.X + 0.5f, r.Y + 0.5f, r.Width - 1, r.Height - 1), Math.Max(1, radius - 0.5f)))
-        using (var edgeBrush = new LinearGradientBrush(RectangleF.Inflate(r, 1, 1), Color.FromArgb(18, 255, 255, 255), Color.FromArgb(46, 255, 255, 255), 90f))
-        using (var pen = new Pen(edgeBrush, Math.Max(1f, s))) g.DrawPath(pen, edge);
-        if (focus > 0.01f)
-        {
-            using var ring = UiTheme.Rounded(RectangleF.Inflate(r, -0.5f, -0.5f), radius); using var pen = new Pen(UiTheme.WithAlpha(UiTheme.Current.Accent, (int)(170 * focus)), 1.4f * s);
-            g.DrawPath(pen, ring);
-        }
-    }
+    /// <summary>Raised round knob for switches and sliders.</summary>
+    public static void Knob(Graphics g, RectangleF r, float s, Color? face = null) =>
+        Raised(g, r, r.Width / 2, s, SmallDepth, face ?? UiTheme.Blend(UiTheme.Current.Surface, Color.White, 0.10f), convex: 1);
 
-    /// <summary>White iOS-style knob with a soft drop shadow.</summary>
-    public static void Knob(Graphics g, RectangleF r, float s)
+    /// <summary>Avatar: a slightly raised coloured disc with initials or the group glyph.</summary>
+    public static void Avatar(Graphics g, RectangleF r, string id, string name, bool group = false, float depth = SmallDepth)
     {
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        Shadow(g, r, r.Width / 2, 0, 1.5f * s, 6 * s, Color.FromArgb(90, 0, 0, 0));
-        using var fill = new SolidBrush(Color.FromArgb(250, 248, 249, 252)); g.FillEllipse(fill, r);
-        using var rim = new Pen(Color.FromArgb(40, 0, 0, 0), 0.8f); g.DrawEllipse(rim, r);
-    }
-
-    /// <summary>Flat gradient avatar with initials (no gloss, no bevel).</summary>
-    public static void Avatar(Graphics g, RectangleF r, string id, string name, bool group = false)
-    {
-        g.SmoothingMode = SmoothingMode.AntiAlias;
         var color = UiTheme.AvatarColor(id);
-        using (var fill = new LinearGradientBrush(RectangleF.Inflate(r, 1, 1), UiTheme.Blend(color, Color.White, 0.12f), UiTheme.Blend(color, Color.Black, 0.28f), 90f))
-            g.FillEllipse(fill, r);
-        using (var rim = new Pen(Color.FromArgb(46, 255, 255, 255), 1f)) g.DrawEllipse(rim, RectangleF.Inflate(r, -0.5f, -0.5f));
-        var ink = Color.FromArgb(240, 255, 255, 255);
+        Raised(g, r, r.Width / 2, 1, depth, color, convex: 0.9f, rim: 0.8f);
+        var ink = Color.FromArgb(245, 255, 255, 255);
         if (group) UiIcons.Draw(g, UiIcon.Group, RectangleF.Inflate(r, -r.Width * 0.25f, -r.Height * 0.25f), ink);
         else
         {
@@ -230,15 +119,214 @@ public static class Glass
         }
     }
 
-    public static void StatusDot(Graphics g, PointF center, float size, Color color, Color ring)
+    /// <summary>Presence dot set into the face it sits on.</summary>
+    public static void StatusDot(Graphics g, PointF center, float size, Color color, Color? ring = null)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var r = new SolidBrush(ring)) g.FillEllipse(r, center.X - size / 2 - 2, center.Y - size / 2 - 2, size + 4, size + 4);
+        using (var r = new SolidBrush(ring ?? UiTheme.Current.Surface)) g.FillEllipse(r, center.X - size / 2 - 2.5f, center.Y - size / 2 - 2.5f, size + 5, size + 5);
         using (var b = new SolidBrush(color)) g.FillEllipse(b, center.X - size / 2, center.Y - size / 2, size, size);
     }
 }
 
-/// <summary>Plain container that shows the backdrop (and glass of its ancestors) instead of a flat colour.</summary>
+/// <summary>
+/// Cached neumorphic templates: a small, really blurred image of a whole shape (both shadows, face and lit edge), drawn as
+/// nine slices: corners are copied, edges and middle are stretched from one pixel. A card of any size costs nine copies.
+/// </summary>
+internal static class Shadows
+{
+    private sealed record Key(bool Inset, int Width, int Height, int Radius, int Blur, int Offset, int Dark, int Light, int Face, int Rim);
+    private static readonly Dictionary<Key, Bitmap> cache = [];
+    private static readonly ImageAttributes clamp = CreateClamp();
+    private static ImageAttributes CreateClamp() { var a = new ImageAttributes(); a.SetWrapMode(WrapMode.TileFlipXY); return a; }
+
+    /// <summary>Outer shadow pair, optionally with the flat face and its rim baked in.</summary>
+    public static void Raised(Graphics g, RectangleF shape, float radius, int blur, int offset, Color dark, Color light, Color? face, float rim)
+    {
+        var r = Rectangle.Round(shape); if (r.Width < 2 || r.Height < 2) return;
+        var rad = (int)Math.Round(Math.Min(radius, Math.Min(r.Width, r.Height) / 2f));
+        var nominal = 2 * (rad + blur + offset) + 3;
+        int w = Math.Min(r.Width, nominal), h = Math.Min(r.Height, nominal);
+        var image = Get(new Key(false, w, h, rad, blur, offset, dark.ToArgb(), light.ToArgb(), face?.ToArgb() ?? 0, face is null ? 0 : (int)Math.Round(rim * 100)));
+        var extent = (image.Width - w) / 2;
+        Draw(g, image, new Rectangle(r.X - extent, r.Y - extent, r.Width + 2 * extent, r.Height + 2 * extent), r.Width > w, r.Height > h, skipCenter: face is null);
+    }
+
+    /// <summary>Inset well: flat face with both inner shadows.</summary>
+    public static void Inset(Graphics g, RectangleF shape, float radius, int blur, int offset, Color dark, Color light, Color face)
+    {
+        var r = Rectangle.Round(shape); if (r.Width < 2 || r.Height < 2) return;
+        var rad = (int)Math.Round(Math.Min(radius, Math.Min(r.Width, r.Height) / 2f));
+        var nominal = 2 * (rad + blur + offset) + 3;
+        int w = Math.Min(r.Width, nominal), h = Math.Min(r.Height, nominal);
+        var image = Get(new Key(true, w, h, rad, blur, offset, dark.ToArgb(), light.ToArgb(), face.ToArgb(), 0));
+        Draw(g, image, r, r.Width > w, r.Height > h, skipCenter: false);
+    }
+
+    /// <summary>Lit edge as two strokes: one fading down from the top, one fading right from the left. Slices cleanly.</summary>
+    public static void StrokeRim(Graphics g, RectangleF r, float radius, float width, float strength)
+    {
+        var edge = new RectangleF(r.X + width / 2, r.Y + width / 2, r.Width - width, r.Height - width);
+        using var path = UiTheme.Rounded(edge, Math.Max(0.5f, radius - width / 2));
+        var top = Color.FromArgb(Math.Clamp((int)(30 * strength), 0, 255), 255, 255, 255); var none = Color.FromArgb(0, 255, 255, 255);
+        var bounds = RectangleF.Inflate(r, 0.5f, 0.5f);
+        using (var vertical = new LinearGradientBrush(bounds, top, none, 90f) { Blend = new Blend { Factors = [0f, 0.85f, 1f], Positions = [0f, 0.35f, 1f] } })
+        using (var pen = new Pen(vertical, width)) g.DrawPath(pen, path);
+        using (var horizontal = new LinearGradientBrush(bounds, Color.FromArgb(top.A * 2 / 3, top), none, 0f) { Blend = new Blend { Factors = [0f, 0.85f, 1f], Positions = [0f, 0.35f, 1f] } })
+        using (var pen = new Pen(horizontal, width)) g.DrawPath(pen, path);
+    }
+
+    private static void Draw(Graphics g, Bitmap image, Rectangle dest, bool sliceX, bool sliceY, bool skipCenter)
+    {
+        int width = image.Width, height = image.Height, cx = width / 2, cy = height / 2;
+        (int Src, int Size, int Dst, int DstSize)[] xs = sliceX
+            ? [(0, cx, dest.X, cx), (cx, 1, dest.X + cx, dest.Width - width + 1), (cx + 1, width - cx - 1, dest.Right - (width - cx - 1), width - cx - 1)]
+            : [(0, width, dest.X, width)];
+        (int Src, int Size, int Dst, int DstSize)[] ys = sliceY
+            ? [(0, cy, dest.Y, cy), (cy, 1, dest.Y + cy, dest.Height - height + 1), (cy + 1, height - cy - 1, dest.Bottom - (height - cy - 1), height - cy - 1)]
+            : [(0, height, dest.Y, height)];
+        var state = g.Save();
+        g.InterpolationMode = InterpolationMode.NearestNeighbor; g.PixelOffsetMode = PixelOffsetMode.Half; g.CompositingMode = CompositingMode.SourceOver; g.CompositingQuality = CompositingQuality.HighSpeed;
+        var clip = g.ClipBounds;
+        for (var i = 0; i < xs.Length; i++)
+            for (var j = 0; j < ys.Length; j++)
+            {
+                var x = xs[i]; var y = ys[j]; if (x.DstSize <= 0 || y.DstSize <= 0) continue;
+                var target = new Rectangle(x.Dst, y.Dst, x.DstSize, y.DstSize);
+                if (!clip.IntersectsWith(target)) continue;
+                if (sliceX && sliceY && i == 1 && j == 1)
+                {
+                    // The middle is uniform: fill it with that one colour (or skip it when it is empty / under the face).
+                    if (skipCenter) continue;
+                    var pixel = image.GetPixel(cx, cy);
+                    if (pixel.A == 255) { using var brush = new SolidBrush(pixel); g.CompositingMode = CompositingMode.SourceCopy; g.FillRectangle(brush, target); g.CompositingMode = CompositingMode.SourceOver; continue; }
+                }
+                g.DrawImage(image, target, x.Src, y.Src, x.Size, y.Size, GraphicsUnit.Pixel, clamp);
+            }
+        g.Restore(state);
+    }
+
+    private static Bitmap Get(Key key)
+    {
+        if (cache.TryGetValue(key, out var image)) return image;
+        if (cache.Count > 400) { foreach (var old in cache.Values) old.Dispose(); cache.Clear(); }
+        image = key.Inset ? BuildInset(key) : BuildRaised(key);
+        cache[key] = image; return image;
+    }
+
+    private static Bitmap BuildRaised(Key k)
+    {
+        var extent = k.Blur + k.Offset + 1;
+        int width = k.Width + 2 * extent, height = k.Height + 2 * extent;
+        var dark = Mask(width, height, new RectangleF(extent + k.Offset, extent + k.Offset, k.Width, k.Height), k.Radius); Blur(dark, width, height, k.Blur);
+        var light = Mask(width, height, new RectangleF(extent - k.Offset, extent - k.Offset, k.Width, k.Height), k.Radius); Blur(light, width, height, k.Blur);
+        var bitmap = Compose(width, height, null, [(dark, Color.FromArgb(k.Dark)), (light, Color.FromArgb(k.Light))]);
+        if (k.Face != 0)
+        {
+            using var g = Graphics.FromImage(bitmap); g.SmoothingMode = SmoothingMode.AntiAlias;
+            var shape = new RectangleF(extent, extent, k.Width, k.Height);
+            using (var path = UiTheme.Rounded(shape, k.Radius)) using (var brush = new SolidBrush(Color.FromArgb(k.Face))) g.FillPath(brush, path);
+            if (k.Rim > 0) StrokeRim(g, shape, k.Radius, 1, k.Rim / 100f);
+        }
+        return bitmap;
+    }
+
+    private static Bitmap BuildInset(Key k)
+    {
+        var pad = k.Blur + k.Offset + 2;
+        int width = k.Width + 2 * pad, height = k.Height + 2 * pad;
+        int[] Inner(int dx, int dy)
+        {
+            var shifted = Mask(width, height, new RectangleF(pad + dx, pad + dy, k.Width, k.Height), k.Radius);
+            for (var i = 0; i < shifted.Length; i++) shifted[i] = 255 - shifted[i];
+            Blur(shifted, width, height, k.Blur); return Crop(shifted, width, pad, k.Width, k.Height);
+        }
+        var shape = Crop(Mask(width, height, new RectangleF(pad, pad, k.Width, k.Height), k.Radius), width, pad, k.Width, k.Height);
+        var dark = Inner(k.Offset, k.Offset); var light = Inner(-k.Offset, -k.Offset);
+        for (var i = 0; i < shape.Length; i++) { dark[i] = dark[i] * shape[i] / 255; light[i] = light[i] * shape[i] / 255; }
+        return Compose(k.Width, k.Height, (shape, Color.FromArgb(k.Face)), [(dark, Color.FromArgb(k.Dark)), (light, Color.FromArgb(k.Light))]);
+    }
+
+    private static int[] Crop(int[] source, int stride, int pad, int width, int height)
+    {
+        var result = new int[width * height];
+        for (var y = 0; y < height; y++) Array.Copy(source, (y + pad) * stride + pad, result, y * width, width);
+        return result;
+    }
+
+    private static int[] Mask(int width, int height, RectangleF shape, float radius)
+    {
+        using var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(bitmap))
+        {
+            g.Clear(Color.Transparent); g.SmoothingMode = SmoothingMode.AntiAlias;
+            using var path = UiTheme.Rounded(shape, radius); g.FillPath(Brushes.White, path);
+        }
+        var data = bitmap.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            var bytes = new byte[data.Stride * height]; Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);
+            var mask = new int[width * height];
+            for (var y = 0; y < height; y++) for (var x = 0; x < width; x++) mask[y * width + x] = bytes[y * data.Stride + x * 4 + 3];
+            return mask;
+        }
+        finally { bitmap.UnlockBits(data); }
+    }
+
+    /// <summary>Three box passes per axis: a close, cheap approximation of a gaussian whose reach is <paramref name="blur"/> pixels.</summary>
+    private static void Blur(int[] values, int width, int height, int blur)
+    {
+        var radius = Math.Max(1, (int)Math.Round(blur / 3.0));
+        var buffer = new int[Math.Max(width, height)];
+        for (var pass = 0; pass < 3; pass++)
+        {
+            for (var y = 0; y < height; y++) BoxLine(values, y * width, 1, width, radius, buffer);
+            for (var x = 0; x < width; x++) BoxLine(values, x, width, height, radius, buffer);
+        }
+    }
+    private static void BoxLine(int[] values, int start, int step, int length, int radius, int[] buffer)
+    {
+        for (var i = 0; i < length; i++) buffer[i] = values[start + i * step];
+        var window = 2 * radius + 1; var sum = 0;
+        for (var i = -radius; i <= radius; i++) sum += i >= 0 && i < length ? buffer[i] : 0;
+        for (var i = 0; i < length; i++)
+        {
+            values[start + i * step] = sum / window;
+            var add = i + radius + 1; var remove = i - radius;
+            if (add < length) sum += buffer[add];
+            if (remove >= 0) sum -= buffer[remove];
+        }
+    }
+
+    /// <summary>Stacks coverage masks with source-over, bottom first, into a premultiplied bitmap.</summary>
+    private static Bitmap Compose(int width, int height, (int[] Mask, Color Color)? bottom, (int[] Mask, Color Color)[] layers)
+    {
+        var bitmap = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
+        var data = bitmap.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+        try
+        {
+            var bytes = new byte[data.Stride * height];
+            for (var y = 0; y < height; y++)
+                for (var x = 0; x < width; x++)
+                {
+                    var index = y * width + x; float r = 0, g = 0, b = 0, a = 0;
+                    void Over((int[] Mask, Color Color) layer)
+                    {
+                        var alpha = layer.Mask[index] / 255f * layer.Color.A / 255f; if (alpha <= 0) return;
+                        r = layer.Color.R * alpha + r * (1 - alpha); g = layer.Color.G * alpha + g * (1 - alpha); b = layer.Color.B * alpha + b * (1 - alpha); a = alpha + a * (1 - alpha);
+                    }
+                    if (bottom is { } face) Over(face);
+                    foreach (var layer in layers) Over(layer);
+                    var i = y * data.Stride + x * 4;
+                    bytes[i] = (byte)Math.Clamp(b + 0.5f, 0, 255); bytes[i + 1] = (byte)Math.Clamp(g + 0.5f, 0, 255); bytes[i + 2] = (byte)Math.Clamp(r + 0.5f, 0, 255); bytes[i + 3] = (byte)Math.Clamp(a * 255 + 0.5f, 0, 255);
+                }
+            Marshal.Copy(bytes, 0, data.Scan0, bytes.Length);
+        }
+        finally { bitmap.UnlockBits(data); }
+        return bitmap;
+    }
+}
+
+/// <summary>Plain container that shows the face of the surface it sits on.</summary>
 public class BackdropPanel : Panel
 {
     public BackdropPanel()
@@ -249,7 +337,7 @@ public class BackdropPanel : Panel
     protected override void OnPaintBackground(PaintEventArgs e) => Backdrop.Paint(e.Graphics, this, ClientRectangle);
 }
 
-/// <summary>Label that sits on glass: paints the backdrop slice behind itself, keeps an opaque BackColor for the framework.</summary>
+/// <summary>Label on a surface: paints the face behind itself, keeps an opaque BackColor for the framework.</summary>
 public class UiLabel : Label
 {
     public UiLabel() { SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.ResizeRedraw, true); }

@@ -24,7 +24,7 @@ public sealed class ChatView : Control
     public ChatView()
     {
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
-        BackColor = UiTheme.Current.GlassSolid; TabStop = true; AccessibleRole = AccessibleRole.List; AccessibleName = "История чата";
+        BackColor = UiTheme.Current.Surface; TabStop = true; AccessibleRole = AccessibleRole.List; AccessibleName = "История чата";
     }
     public int Count => records.Count;
     public IReadOnlyList<ChatRecord> Records => records;
@@ -56,8 +56,8 @@ public sealed class ChatView : Control
     {
         items.Clear(); laidOutWidth = Width;
         if (Width < 40) { contentHeight = 0; FitHeight(); return; }
-        var s = S; var side = 6 * s; var maxBubble = Math.Max(120 * s, (Width - 2 * side) * 0.74f);
-        var padX = 14 * s; var padY = 8 * s; var y = 8 * s;
+        var s = S; var side = 10 * s; var maxBubble = Math.Max(120 * s, (Width - 2 * side) * 0.74f);
+        var padX = 14 * s; var padY = 8 * s; var y = 10 * s;
         DateTime? day = null; ChatRecord? previous = null;
         foreach (var record in records)
         {
@@ -84,7 +84,7 @@ public sealed class ChatView : Control
             var x = record.Mine ? Width - side - bubbleW : side;
             var bubble = new RectangleF(x, y, bubbleW, bubbleH);
             items.Add(new Item(false, text, bubble, new RectangleF(x + padX, y + padY, bubbleW - 2 * padX + 2, measured.Height + 2), record, header, headerBounds));
-            y += bubbleH + 4 * s; previous = record;
+            y += bubbleH + 8 * s; previous = record;
         }
         contentHeight = y + 10 * s;
         FitHeight();
@@ -132,7 +132,7 @@ public sealed class ChatView : Control
             if (bounds.Bottom < clip.Top || top > clip.Bottom) continue;
             if (item.Day)
             {
-                Glass.Pill(g, bounds, bounds.Height / 2, s, Color.FromArgb(20, 255, 255, 255), 0, 0, 0.6f);
+                Neu.Inset(g, bounds, bounds.Height / 2, s, 0.5f);
                 TextRenderer.DrawText(g, item.Text, UiTheme.Caption, Rectangle.Round(bounds), t.Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.PreserveGraphicsClipping);
                 continue;
             }
@@ -145,8 +145,9 @@ public sealed class ChatView : Control
                 TextRenderer.DrawText(g, item.Header, HeaderFont, headerRect, color, align | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis | TextFormatFlags.PreserveGraphicsClipping);
             }
             var radius = Math.Min(18 * s, bounds.Height / 2);
-            if (record.Mine) Glass.Pill(g, bounds, radius, s, t.Accent, record == focused ? 0.6f : 0);
-            else Glass.Pill(g, bounds, radius, s, Color.FromArgb(record == focused ? 40 : 28, 255, 255, 255));
+            // Bubbles are softly raised: yours in the accent colour, others in the surface tone.
+            if (record.Mine) Neu.Raised(g, bounds, radius, s, Neu.SmallDepth, record == focused ? UiTheme.Blend(t.Accent, Color.White, 0.1f) : t.Accent, convex: 0.6f, rim: 1.2f);
+            else Neu.Raised(g, bounds, radius, s, Neu.SmallDepth, record == focused ? UiTheme.Blend(t.Surface, Color.White, 0.05f) : UiTheme.Blend(t.Surface, Color.White, 0.025f), rim: 1);
             var textRect = Rectangle.Round(new RectangleF(item.TextBounds.X, item.TextBounds.Y + offset, item.TextBounds.Width, item.TextBounds.Height));
             TextRenderer.DrawText(g, item.Text, MessageFont, textRect, record.Mine ? t.AccentInk : t.Text, Wrap);
         }
