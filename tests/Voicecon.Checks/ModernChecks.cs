@@ -37,16 +37,20 @@ internal static class ModernChecks
             Require(error is null && encoded >= 5 && decoded >= 2, $"H264 {fps} fps pipeline failed: {encoded} encoded, {decoded} decoded; {error}; decoder {decoder.Error}");
             Console.WriteLine($"PASS synthetic H.264 target {fps}: {encoded} encoded / {decoded} decoded; backend {encoder.Backend}; no capture devices used");
         }
-        // Stopping a stream leaves no encoder behind: after a normal stop, and when stopped while still starting.
+        await CheckEncoderLifecycle();
+    }
+    /// <summary>Stopping a stream leaves no encoder behind: after a normal stop, and when stopped while still starting. Needs no GPU.</summary>
+    public static async Task CheckEncoderLifecycle()
+    {
         var before = MediaRuntime.Running;
-        using (var encoder = new VideoEncoder())
-        {
-            await encoder.StartAsync(new Size(320, 180), new Size(320, 180), 30);
-            var helper = (Process)typeof(VideoEncoder).GetField("process", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(encoder)!;
-            Require(encoder.Running && MediaRuntime.InJob(helper), "A running encoder belongs to Voicecon's job (it ends with Voicecon, even after a crash)");
-            encoder.Dispose(); Require(!encoder.Running, "A stopped encoder reports nothing running");
-            Require(MediaRuntime.Running == before, $"Stopping a stream ends its encoder ({MediaRuntime.Running} helpers running, {before} before)");
-        }
+        // A long-running helper (silent test audio in real time) stands in for an encoder that keeps going.
+        var helper = MediaRuntime.Start(["-hide_banner", "-loglevel", "error", "-nostdin", "-re", "-f", "lavfi", "-i", "anullsrc", "-f", "null", "-"]);
+        await Task.Delay(300);
+        Require(!helper.HasExited && MediaRuntime.InJob(helper), "A running helper belongs to Voicecon's job (it ends with Voicecon, even after a crash)");
+        Require(MediaRuntime.Running == before + 1, "A running helper is counted");
+        MediaRuntime.StopAll();
+        Require(MediaRuntime.Running == 0, $"Ending a call stops every helper ({MediaRuntime.Running} still running)");
+        before = 0;
         for (var delay = 0; delay <= 400; delay += 50)
         {
             var encoder = new VideoEncoder(); var start = encoder.StartAsync(new Size(320, 180), new Size(320, 180), 30);

@@ -26,6 +26,7 @@ internal static class Program
                 if (args.Contains("--session-features")) { SessionFeatureChecks.Check(); return; }
                 if (args.Contains("--notification-checks")) { await NotificationChecks.Check(); return; }
                 if (args.Contains("--modern-checks")) { await ModernChecks.Check(); return; }
+                if (args.Contains("--encoder-checks")) { await ModernChecks.CheckEncoderLifecycle(); return; }
                 if (args.Contains("--render-ui")) { UiRenders.Render(); return; }
                 if (args.Contains("--ui-benchmark")) { UiPaintChecks.Benchmark(); return; }
                 if (args.Contains("--motion-benchmark")) { UiPaintChecks.MotionBenchmark(); return; }

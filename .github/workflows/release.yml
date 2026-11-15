@@ -58,8 +58,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet run --project tests/Voicecon.Checks -c Release --no-build -- --session-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # Synthetic H.264 encode/decode (no capture devices) and no encoder left running after a stream stops.
-          dotnet run --project tests/Voicecon.Checks -c Release --no-build -- --modern-checks
+          # No video helper left running after a stream stops (the runner has no GPU, so no real encoding here).
+          dotnet run --project tests/Voicecon.Checks -c Release --no-build -- --encoder-checks
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build executable and installer
         if: env.PUBLISHED == 'false'
