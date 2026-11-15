@@ -220,17 +220,51 @@ public sealed class ConversationHeader : Control
 /// <summary>Bottom of the sidebar: own avatar, name and delivery status.</summary>
 public sealed class SelfCard : Control
 {
-    private string id = "me", name = "Игрок", status = "Подключаемся…"; private bool ready;
-    public SelfCard() { SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque | ControlStyles.ResizeRedraw, true); BackColor = UiTheme.Current.Surface; }
+    private string id = "me", name = "Игрок", status = "Подключаемся…"; private bool ready, avatarHover, avatarPressed;
+    private readonly ToolTip tips = new() { InitialDelay = 400 };
+    /// <summary>Your avatar was clicked (or Enter / Space pressed): open the avatar style picker.</summary>
+    public event Action? AvatarClicked;
+    public SelfCard()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+        BackColor = UiTheme.Current.Surface; TabStop = true; AccessibleRole = AccessibleRole.PushButton; AccessibleDescription = "Нажмите, чтобы сменить аватарку";
+    }
     public void Set(string id, string name, string status, bool ready) { this.id = id; this.name = name; this.status = status; this.ready = ready; AccessibleName = name + ". " + status; Invalidate(); }
     public string Status => status;
+    [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public RectangleF AvatarBounds { get { var s = DeviceDpi / 96f; return new RectangleF(6 * s, (Height - 36 * s) / 2, 36 * s, 36 * s); } }
+    private bool OnAvatar(Point p) => RectangleF.Inflate(AvatarBounds, 3, 3).Contains(p);
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        var over = OnAvatar(e.Location);
+        if (over != avatarHover) { avatarHover = over; Cursor = over ? Cursors.Hand : Cursors.Default; tips.SetToolTip(this, over ? "Сменить аватарку" : ""); Invalidate(); }
+        base.OnMouseMove(e);
+    }
+    protected override void OnMouseLeave(EventArgs e) { avatarHover = avatarPressed = false; Cursor = Cursors.Default; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left && OnAvatar(e.Location)) { avatarPressed = true; Invalidate(); } base.OnMouseDown(e); }
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        var click = avatarPressed && e.Button == MouseButtons.Left && OnAvatar(e.Location);
+        avatarPressed = false; Invalidate(); base.OnMouseUp(e);
+        if (click) AvatarClicked?.Invoke();
+    }
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode is Keys.Enter or Keys.Space) { AvatarClicked?.Invoke(); e.Handled = true; }
+        base.OnKeyDown(e);
+    }
+    protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+    protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+    protected override void Dispose(bool disposing) { if (disposing) tips.Dispose(); base.Dispose(disposing); }
     protected override void OnPaint(PaintEventArgs e)
     {
         Backdrop.Paint(e.Graphics, this, ClientRectangle);
         var t = UiTheme.Current; var g = e.Graphics; var s = DeviceDpi / 96f;
         var flags = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.PreserveGraphicsClipping | TextFormatFlags.PreserveGraphicsTranslateTransform;
-        var avatar = new RectangleF(6 * s, (Height - 36 * s) / 2, 36 * s, 36 * s);
-        Neu.Avatar(g, avatar, id, name);
+        var avatar = AvatarBounds;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        Neu.Avatar(g, avatarPressed ? RectangleF.Inflate(avatar, -1 * s, -1 * s) : avatar, id, name, depth: avatarHover ? Neu.ButtonDepth : Neu.SmallDepth);
+        if (avatarHover || Focused && ShowFocusCues) { using var ring = new Pen(UiTheme.WithAlpha(t.Accent, avatarHover ? 200 : 150), 1.6f * s); g.DrawEllipse(ring, RectangleF.Inflate(avatar, 2.5f * s, 2.5f * s)); }
         Neu.StatusDot(g, new PointF(avatar.Right - 3 * s, avatar.Bottom - 3 * s), 9 * s, ready ? t.Online : UiTheme.Blend(t.Muted, t.Background, 0.3f), Backdrop.Behind(this));
         var left = (int)(avatar.Right + 10 * s);
         TextRenderer.DrawText(g, name, UiTheme.Strong, new Rectangle(left, (int)(Height / 2f - 19 * s), Width - left, (int)(20 * s)), t.Text, flags);
@@ -435,6 +469,54 @@ public sealed class PeerVolumePopup : ToolStripDropDown
         HandleCreated += (_, _) => WindowTheme.RoundPopup(Handle);
         UiPainting.ApplyBackgrounds(card);
     }
+}
+
+/// <summary>Opened by clicking your avatar: its colour, a photo, or back to the colour. Changes apply at once.</summary>
+public sealed class AvatarPopup : ToolStripDropDown
+{
+    private readonly AvatarPreview preview = new();
+    private readonly AvatarColorPicker colors = new();
+    private readonly SoftButton choose, remove;
+    private readonly UiLabel note;
+    public event Action<Color?>? ColorChosen;
+    public event Action? PhotoRequested, PhotoRemoved;
+    public AvatarPopup()
+    {
+        var s = DeviceDpi / 96f; var t = UiTheme.Current;
+        Padding = Padding.Empty; Margin = Padding.Empty; DropShadowEnabled = false; BackColor = ThemeMenuRenderer.MenuBack; Renderer = new ThemeMenuRenderer();
+        var card = new SurfacePanel { Gutter = 0, Radius = 0, Elevation = 0, FaceColor = ThemeMenuRenderer.MenuBack, Size = new Size((int)(440 * s), (int)(272 * s)), Padding = new Padding((int)(16 * s)), BackColor = ThemeMenuRenderer.MenuBack };
+        var grid = new BufferedGrid { Dock = DockStyle.Fill, ColumnCount = 1, Margin = Padding.Empty }; grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); card.Controls.Add(grid);
+        void Row(Control c, int h) { var r = grid.RowCount++; grid.RowStyles.Add(new RowStyle(SizeType.Absolute, h * s)); c.Dock = DockStyle.Fill; c.Margin = Padding.Empty; grid.Controls.Add(c, 0, r); }
+        UiLabel Caption(string text, Font font, Color color) => new() { Text = text, Font = font, ForeColor = color, TextAlign = ContentAlignment.MiddleLeft };
+        Row(Caption("Аватарка", UiTheme.Strong, t.Text), 24);
+        note = Caption("", UiTheme.Small, t.Muted); Row(note, 20);
+        var top = new BufferedGrid { ColumnCount = 3, Margin = Padding.Empty };
+        top.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104 * s)); top.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 14 * s)); top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        top.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        preview.Dock = DockStyle.Fill; preview.Margin = Padding.Empty; top.Controls.Add(preview, 0, 0);
+        var buttons = new BufferedGrid { Dock = DockStyle.Fill, ColumnCount = 1, Margin = Padding.Empty }; buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        buttons.RowStyles.Add(new RowStyle(SizeType.Percent, 50)); buttons.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+        choose = new SoftButton { Text = "Выбрать фото", Glyph = UiIcon.Folder, Tone = ButtonTone.Secondary, Dock = DockStyle.Fill, Margin = new Padding(0, 4, 0, 4) };
+        remove = new SoftButton { Text = "Убрать фото", Glyph = UiIcon.Trash, Tone = ButtonTone.Quiet, Dock = DockStyle.Fill, Margin = new Padding(0, 4, 0, 4) };
+        buttons.Controls.Add(choose, 0, 0); buttons.Controls.Add(remove, 0, 1); top.Controls.Add(buttons, 2, 0);
+        Row(top, 104);
+        Row(Caption("Цвет", UiTheme.Small, t.Muted), 20);
+        Row(colors, 48);
+        Row(Caption($"Фото: JPG, PNG, BMP или GIF до {Avatars.MaxPhotoFileBytes / 1024 / 1024} МБ, обрезается до квадрата.", UiTheme.Small, t.Muted), 22);
+        choose.Click += (_, _) => PhotoRequested?.Invoke();
+        remove.Click += (_, _) => PhotoRemoved?.Invoke();
+        colors.ColorChosen += color => ColorChosen?.Invoke(color);
+        Items.Add(new ToolStripControlHost(card) { Margin = Padding.Empty, Padding = Padding.Empty, AutoSize = false, Size = card.Size });
+        HandleCreated += (_, _) => WindowTheme.RoundPopup(Handle);
+        UiPainting.ApplyBackgrounds(card);
+    }
+    /// <summary>Shows the current avatar: <paramref name="color"/> null = automatic colour.</summary>
+    public void Set(string id, string name, Color? color, bool hasPhoto)
+    {
+        preview.Set(id, name); colors.Set(id, color); remove.Enabled = hasPhoto;
+        note.Text = hasPhoto ? "Сейчас фото · цвет виден, если фото убрать" : "Друзья увидят её при следующем звонке";
+    }
+    internal AvatarColorPicker Colors => colors;
 }
 
 /// <summary>Small engraved well with an accent glyph: the icon of a settings section.</summary>

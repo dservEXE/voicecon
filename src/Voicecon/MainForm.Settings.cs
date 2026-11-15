@@ -10,14 +10,27 @@ public sealed partial class MainForm
     private readonly SlimSlider microphoneGain = new();
     private readonly UiLabel microphoneGainValue = new(), chatUsage = new(), chatLimitValue = new();
     private readonly SlimSlider chatLimit = new();
-    private readonly AvatarPreview avatarPreview = new();
-    private readonly AvatarColorPicker avatarColors = new();
-    private readonly SoftButton choosePhoto = new(), removePhoto = new();
-    /// <summary>Refreshes the avatar controls in Settings from the current choice.</summary>
+    /// <summary>The avatar style picker, opened by clicking your avatar (bottom left).</summary>
+    private AvatarPopup? avatarPopup;
+    /// <summary>Refreshes your avatar where it is shown (and the picker, if it is open).</summary>
     private void UpdateAvatarControls()
     {
         var id = contacts?.Id ?? "me"; var own = Avatars.Get(id);
-        avatarPreview.Set(id, settings.Name); avatarColors.Set(id, own?.Color); removePhoto.Enabled = own?.Photo is not null;
+        avatarPopup?.Set(id, settings.Name, own?.Color, own?.Photo is not null);
+        selfCard.Invalidate();
+    }
+    private void ShowAvatarPopup()
+    {
+        if (contacts is null) { SetHint("Аватарка будет доступна после загрузки профиля."); return; }
+        if (avatarPopup is { IsDisposed: false, Visible: true }) { avatarPopup.Close(); return; }
+        var popup = new AvatarPopup(); avatarPopup = popup;
+        popup.ColorChosen += color => { if (contacts is null) return; Avatars.SetOwn(color, Avatars.Get(contacts.Id)?.Photo); ShareOwnAvatar(); UpdateAvatarControls(); };
+        popup.PhotoRemoved += () => { if (contacts is null) return; Avatars.SetOwn(Avatars.Get(contacts.Id)?.Color, null); ShareOwnAvatar(); UpdateAvatarControls(); };
+        // The file dialog takes focus, which would close the picker anyway: close it first, open the dialog after.
+        popup.PhotoRequested += () => { popup.Close(); BeginInvoke(new Action(ChooseAvatarPhoto)); };
+        popup.Closed += (_, _) => BeginInvoke(new Action(() => { if (avatarPopup == popup) avatarPopup = null; popup.Dispose(); }));
+        UpdateAvatarControls();
+        if (!previewMode) popup.Show(selfCard, new Point(0, 0), ToolStripDropDownDirection.AboveRight);
     }
     private void ChooseAvatarPhoto()
     {
@@ -56,14 +69,7 @@ public sealed partial class MainForm
         var profile = SettingsCard("Профиль", UiIcon.Person);
         AddRow(profile, TextLabel("Имя для друзей", 9, TextTone.Muted), 24); name.MaxLength = 24; name.Text = settings.Name; AddRow(profile, InputSurface(name, false), 42);
         AddRow(profile, Space(), 8); PrepareButton(copyCode, "Скопировать мой код друга", UiIcon.Copy); AddRow(profile, copyCode, 48);
-        AddRow(profile, Space(), 10); AddRow(profile, TextLabel("Аватарка", 9, TextTone.Muted), 24);
-        var avatarRow = Columns(104, 14, -1); avatarPreview.Dock = DockStyle.Fill; avatarPreview.Margin = Padding.Empty; avatarRow.Controls.Add(avatarPreview, 0, 0);
-        var avatarButtons = Grid(1); avatarButtons.Dock = DockStyle.Fill;
-        PrepareButton(choosePhoto, "Выбрать фото", UiIcon.Folder, ButtonTone.Secondary); AddRow(avatarButtons, choosePhoto, 48);
-        AddRow(avatarButtons, Space(), 6); PrepareButton(removePhoto, "Убрать фото", UiIcon.Trash, ButtonTone.Quiet); AddRow(avatarButtons, removePhoto, 44);
-        avatarRow.Controls.Add(avatarButtons, 2, 0); AddRow(profile, avatarRow, 104);
-        AddRow(profile, Space(), 4); avatarColors.Dock = DockStyle.Fill; avatarColors.Margin = Padding.Empty; AddRow(profile, avatarColors, 48);
-        AddRow(profile, TextLabel($"Фото: JPG, PNG, BMP или GIF до {Avatars.MaxPhotoFileBytes / 1024 / 1024} МБ, обрезается по центру до квадрата. Друзья увидят аватарку при следующем звонке с вами.", 8.5f, TextTone.Muted), 36);
+        AddRow(profile, TextLabel("Аватарку можно сменить, нажав на неё внизу слева, рядом с вашим именем.", 8.5f, TextTone.Muted), 30);
         FinishCard(page, profile);
 
         var sound = SettingsCard("Звук", UiIcon.Headphones);
@@ -168,7 +174,6 @@ public sealed partial class MainForm
         if (settingsPage.Padding.Left != side) settingsPage.Padding = new Padding(side, 0, side, settingsPage.Padding.Bottom);
         var top = new Padding(side + gutter + (int)(6 * scale), settingsTop.Padding.Top, side + gutter - (int)(4 * scale), 0);
         if (settingsTop.Padding != top) settingsTop.Padding = top;
-        UpdateAvatarControls();
     }
     private static void AddLevel(TableLayoutPanel grid, string title, SlimSlider slider, UiLabel value, int initial)
     {
@@ -195,9 +200,7 @@ public sealed partial class MainForm
         foreach (var check in new[] { ptt, noise, gate }) check.CheckedChanged += (_, _) => { UpdateAudioOptions(); SaveSettings(); };
         talkKey.SelectedIndexChanged += (_, _) => { UpdateAudioOptions(); SaveSettings(); };
         volume.ValueChanged += (_, _) => { UpdateAudioOptions(); SaveSettings(); };
-        choosePhoto.Click += (_, _) => ChooseAvatarPhoto();
-        removePhoto.Click += (_, _) => { if (contacts is null) return; Avatars.SetOwn(Avatars.Get(contacts.Id)?.Color, null); ShareOwnAvatar(); UpdateAvatarControls(); };
-        avatarColors.ColorChosen += color => { if (contacts is null) return; Avatars.SetOwn(color, Avatars.Get(contacts.Id)?.Photo); ShareOwnAvatar(); UpdateAvatarControls(); };
+        selfCard.AvatarClicked += ShowAvatarPopup;
         chatLimit.ValueChanged += (_, _) =>
         {
             // Applied when the slider settles, so dragging past a smaller size does not trim history on the way.

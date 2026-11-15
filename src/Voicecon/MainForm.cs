@@ -843,7 +843,7 @@ public sealed partial class MainForm : Form
     private void OnAvatarsChanged()
     {
         if (IsDisposed) return;
-        contactList.Invalidate(); header.Invalidate(); selfCard.Invalidate(); callStrip.Invalidate(); avatarPreview.Invalidate();
+        contactList.Invalidate(); header.Invalidate(); selfCard.Invalidate(); callStrip.Invalidate(); UpdateAvatarControls();
     }
     private void UpdateStrip()
     {

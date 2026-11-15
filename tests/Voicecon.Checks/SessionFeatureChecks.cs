@@ -77,6 +77,8 @@ internal static class SessionFeatureChecks
         CheckEconomyVoice();
         CheckAvatars();
         CheckChatSelection();
+        CheckLongWords();
+        CheckAvatarPopup();
         CheckStage();
         Console.WriteLine("PASS stream window frames/fullscreen/Esc, 300% sliders, settings drawer, call strip, distinct hang-up vs stop-sharing, draggable segments and switches; no visible windows or capture");
     }
@@ -247,6 +249,58 @@ internal static class SessionFeatureChecks
         var bubble = (RectangleF)item.GetType().GetProperty("Bounds")!.GetValue(item)!; offset = (float)typeof(ChatView).GetProperty("Offset", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
         var tickPixels = 0; for (var y = (int)(bubble.Bottom + offset - 22); y < bubble.Bottom + offset - 4; y++) for (var x = (int)(bubble.Right - 30); x < bubble.Right - 4; x++) { var c = frame.GetPixel(x, y); if (c.G > 190 && c.B > 220 && c.R < 170) tickPixels++; }
         Require(tickPixels > 6, "Read messages show coloured ticks");
+    }
+    /// <summary>A link or other word wider than a bubble is split over lines; copying gives it back whole.</summary>
+    private static void CheckLongWords()
+    {
+        const string link = "https://www.faceit.com/ru/matchmaking/f4148ddd-bce8-41b8-9131-ee83afcdd6dd/Europe%205v5%20Queue";
+        var message = "Заходи " + link + " быстрее";
+        using var host = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Location = new Point(-4000, -4000), Size = new Size(440, 400) };
+        var view = new ChatView { Location = Point.Empty, Size = new Size(420, 380) }; host.Controls.Add(view); _ = host.Handle; _ = view.Handle;
+        view.SetRecords([new ChatRecord("a", "max19", message, false, DateTimeOffset.Now.AddMinutes(-1)), new ChatRecord("b", "Вы", link, true, DateTimeOffset.Now)]);
+        var items = ((System.Collections.IList)typeof(ChatView).GetField("items", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!).Cast<object>()
+            .Where(i => (bool)i.GetType().GetProperty("Day")!.GetValue(i)! == false).ToList();
+        foreach (var item in items)
+        {
+            var bubble = (RectangleF)item.GetType().GetProperty("Bounds")!.GetValue(item)!;
+            var shown = (string)item.GetType().GetProperty("Text")!.GetValue(item)!;
+            Require(bubble.Left >= 0 && bubble.Right <= view.Width && bubble.Width <= view.Width * 0.8f, $"A long link stays inside its bubble ({bubble.Left:0}..{bubble.Right:0} of {view.Width})");
+            Require(shown.Contains('\n') && shown.Split('\n', ' ').All(word => TextRenderer.MeasureText(word, ChatView.MessageFont, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width <= bubble.Width), "A long link is split into pieces that fit a line");
+        }
+        var first = items[0]; var text = (RectangleF)first.GetType().GetProperty("TextBounds")!.GetValue(first)!;
+        var offset = (float)typeof(ChatView).GetProperty("Offset", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
+        typeof(ChatView).GetMethod("BeginSelect", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, [first, new Point((int)text.X + 4, (int)(text.Y + offset + 6))]);
+        var selector = Get<TextBox>(view, "selector"); selector.SelectAll();
+        string Selected() => (string)typeof(ChatView).GetMethod("SelectedText", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, [])!;
+        Require(Selected() == message, "Copying a selected split link gives the original text back");
+        var at = selector.Text.IndexOf("matchmaking", StringComparison.Ordinal); var stop = selector.Text.IndexOf("Queue", StringComparison.Ordinal) + 5;
+        selector.Select(at, stop - at); Require(Selected() == link[link.IndexOf("matchmaking", StringComparison.Ordinal)..], "Copying part of a split link leaves out the added line breaks");
+        var (plain, none) = ((string, int[]))typeof(ChatView).GetMethod("BreakLongWords", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, ["Обычное сообщение\nв две строки", ChatView.MessageFont, 200])!;
+        Require(plain == "Обычное сообщение\nв две строки" && none.Length == 0, "Ordinary words are not split");
+        var (emoji, _) = ((string, int[]))typeof(ChatView).GetMethod("BreakLongWords", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [string.Concat(Enumerable.Repeat("😀", 60)), ChatView.MessageFont, 120])!;
+        Require(emoji.Split('\n').All(line => line.Length > 0 && !char.IsHighSurrogate(line[^1]) && !char.IsLowSurrogate(line[0])), "Emoji are never cut in half");
+    }
+    /// <summary>Clicking your avatar opens its style picker; the settings page no longer has one.</summary>
+    private static void CheckAvatarPopup()
+    {
+        using var popup = new AvatarPopup(); Color? chosen = Color.Empty; popup.ColorChosen += c => chosen = c;
+        popup.Set("ffeeddccbbaa99887766554433221100", "Игрок", Avatars.Palette[2], hasPhoto: false);
+        var remove = Get<SoftButton>(popup, "remove"); var colors = Get<AvatarColorPicker>(popup, "colors");
+        Require(!remove.Enabled, "Without a photo there is nothing to remove");
+        Require(Get<int>(colors, "selected") == 2, "The picker shows the chosen colour");
+        typeof(AvatarColorPicker).GetMethod("Choose", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(colors, [4]);
+        Require(chosen?.ToArgb() == Avatars.Palette[4].ToArgb(), "Choosing a colour in the picker reports it");
+        popup.Set("ffeeddccbbaa99887766554433221100", "Игрок", null, hasPhoto: true); Require(remove.Enabled && Get<int>(colors, "selected") == -1, "With a photo it can be removed; automatic colour shows as such");
+        using var form = new MainForm(true, "graphite"); _ = form.Handle;
+        var card = Get<SelfCard>(form, "selfCard"); var clicked = 0; card.AvatarClicked += () => clicked++;
+        card.Size = new Size(240, 48); var center = Point.Round(new PointF(card.AvatarBounds.X + card.AvatarBounds.Width / 2, card.AvatarBounds.Y + card.AvatarBounds.Height / 2));
+        typeof(SelfCard).GetMethod("OnMouseDown", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(card, [new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0)]);
+        typeof(SelfCard).GetMethod("OnMouseUp", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(card, [new MouseEventArgs(MouseButtons.Left, 1, center.X, center.Y, 0)]);
+        Require(clicked == 1, "Clicking your avatar opens the picker");
+        typeof(SelfCard).GetMethod("OnMouseDown", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(card, [new MouseEventArgs(MouseButtons.Left, 1, 200, center.Y, 0)]);
+        typeof(SelfCard).GetMethod("OnMouseUp", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(card, [new MouseEventArgs(MouseButtons.Left, 1, 200, center.Y, 0)]);
+        Require(clicked == 1, "Clicking your name does not");
+        Require(form.GetType().GetField("avatarColors", BindingFlags.Instance | BindingFlags.NonPublic) is null, "Settings no longer carry the avatar picker");
     }
     /// <summary>Energy between 4 and 7.5 kHz (what narrowband voice loses), from 512-point DFT frames.</summary>
     private static double HighBand(short[] samples)
