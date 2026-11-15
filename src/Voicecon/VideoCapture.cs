@@ -80,7 +80,7 @@ public sealed class VideoCapture : IDisposable
     { fps = frames is 15 or 30 or 60 or 120 ? frames : 30; resolution = height is 720 or 1080 or 1440 ? height : 0; bitrate = Math.Max(0, bitrateKbps); }
     public async Task StartScreenAsync(ShareSource source)
     {
-        StopScreen(); var generation = ++screenGeneration; var encoder = screenEncoder = new VideoEncoder(); screenActive = true;
+        StopScreen(); var generation = ++screenGeneration; var encoder = screenEncoder = new VideoEncoder("screen"); screenActive = true;
         try
         {
             var native = source.Size;
@@ -106,6 +106,11 @@ public sealed class VideoCapture : IDisposable
         // Each part is released on its own, so a failure in one never leaves the encoder running or viewers uninformed.
         try { old?.Dispose(); } catch (Exception ex) { AppLog.Error("Захват экрана не закрылся", ex); }
         try { encoder?.Dispose(); } catch (Exception ex) { AppLog.Error("Видеокодировщик не остановился", ex); }
+        // Second, independent guarantee: every helper started for the screen share ends now, whatever state it was in…
+        var leftover = MediaRuntime.StopFor("screen"); if (leftover > 0) AppLog.Error($"После остановки демонстрации завершено ещё {leftover} видеопроцессов", null);
+        // …and once more a moment later, in case one was still being started (unless a new share has begun since).
+        var generation = screenGeneration;
+        _ = Task.Delay(2000).ContinueWith(_ => { if (!screenActive && generation == screenGeneration) { var late = MediaRuntime.StopFor("screen"); if (late > 0) AppLog.Error($"Через 2 с после остановки демонстрации завершено {late} видеопроцессов", null); } }, TaskScheduler.Default);
         if (active) Stopped?.Invoke(1, NextSequence());
     }
     public static async Task<IReadOnlyList<MediaFrameSourceGroup>> CamerasAsync()
@@ -124,7 +129,7 @@ public sealed class VideoCapture : IDisposable
             var format = source.SupportedFormats.Where(f => f.FrameRate.Denominator > 0 && f.FrameRate.Numerator / (double)f.FrameRate.Denominator <= fps + 0.5 && (resolution == 0 || f.VideoFormat.Height <= resolution)).OrderByDescending(f => (long)f.VideoFormat.Width * f.VideoFormat.Height).ThenByDescending(f => f.FrameRate.Numerator / (double)f.FrameRate.Denominator).FirstOrDefault();
             if (format is not null) await source.SetFormatAsync(format);
             var native = source.CurrentFormat.VideoFormat; var size = VideoEncoder.OutputSize(new Size((int)native.Width, (int)native.Height), resolution); CameraSize = size;
-            var encoder = cameraEncoder = new VideoEncoder();
+            var encoder = cameraEncoder = new VideoEncoder("camera");
             encoder.Encoded += (data, key) => { if (cameraActive && generation == cameraGeneration) Frame?.Invoke(H264Packet.Wrap(data, 2, NextSequence(), size, key)); };
             encoder.Failed += message => { if (generation != cameraGeneration) return; Error?.Invoke("Камера остановлена: " + message); _ = StopCameraAsync(); };
             await encoder.StartAsync(size, size, fps, null, bitrate);
@@ -154,7 +159,10 @@ public sealed class VideoCapture : IDisposable
     public async Task StopCameraAsync()
     {
         var active = cameraActive; cameraActive = false; cameraGeneration++;
-        cameraEncoder?.Dispose(); cameraEncoder = null; var old = reader; reader = null;
+        var encoder = cameraEncoder; cameraEncoder = null;
+        try { encoder?.Dispose(); } catch (Exception ex) { AppLog.Error("Видеокодировщик камеры не остановился", ex); }
+        MediaRuntime.StopFor("camera");
+        var old = reader; reader = null;
         if (old is not null) { old.FrameArrived -= CameraFrame; try { await old.StopAsync(); } catch { } old.Dispose(); }
         var oldCapture = camera; camera = null; oldCapture?.Dispose(); if (active) Stopped?.Invoke(2, NextSequence());
     }

@@ -42,7 +42,7 @@ public sealed class AnnexBFrames(Action<byte[], bool> frame)
     }
     public void Complete() { if (buffer.Count > 0) Emit(buffer.ToArray()); buffer.Clear(); scan = 0; }
 }
-public sealed class VideoEncoder : IDisposable
+public sealed class VideoEncoder(string purpose = "") : IDisposable
 {
     private Process? process;
     private readonly Channel<byte[]> raw = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true });
@@ -79,7 +79,7 @@ public sealed class VideoEncoder : IDisposable
                 args.AddRange(["-bsf:v", "h264_metadata=aud=insert", "-flush_packets", "1", "-f", "h264", "pipe:1"]);
                 // Stopped while an earlier encoder was being tried: start nothing (a helper started now would be left running).
                 stop.Token.ThrowIfCancellationRequested();
-                var started = MediaRuntime.Start(args, !desktopOutput.HasValue);
+                var started = MediaRuntime.Start(args, !desktopOutput.HasValue, purpose);
                 lock (stop) { if (stop.IsCancellationRequested) { MediaRuntime.Stop(started); stop.Token.ThrowIfCancellationRequested(); } process = started; }
                 var errors = process.StandardError.ReadToEndAsync();
                 // Raw-input encoders need one synthetic black frame to initialise hardware; never a screen capture.
@@ -133,7 +133,7 @@ public sealed class VideoDecoder : IDisposable
             if (process is null)
             {
                 size = new Size(H264Packet.Width(packet), H264Packet.Height(packet));
-                var p = process = MediaRuntime.Start(["-hide_banner", "-loglevel", "error", "-avioflags", "direct", "-probesize", "32", "-analyzeduration", "0", "-flags", "low_delay", "-threads", "2", "-f", "h264", "-i", "pipe:0", "-an", "-threads", "2", "-f", "rawvideo", "-pix_fmt", "bgra", "-fps_mode", "passthrough", "pipe:1"], true);
+                var p = process = MediaRuntime.Start(["-hide_banner", "-loglevel", "error", "-avioflags", "direct", "-probesize", "32", "-analyzeduration", "0", "-flags", "low_delay", "-threads", "2", "-f", "h264", "-i", "pipe:0", "-an", "-threads", "2", "-f", "rawvideo", "-pix_fmt", "bgra", "-fps_mode", "passthrough", "pipe:1"], true, "watch");
                 _ = p.StandardError.ReadToEndAsync().ContinueWith(t => Error = t.Result);
                 _ = Task.Run(async () =>
                 {

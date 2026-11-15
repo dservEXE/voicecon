@@ -51,6 +51,18 @@ internal static class ModernChecks
         MediaRuntime.StopAll();
         Require(MediaRuntime.Running == 0, $"Ending a call stops every helper ({MediaRuntime.Running} still running)");
         before = 0;
+        // "Stop sharing" ends every helper of the share — even ones the encoder lost track of — and nothing else.
+        string[] silent = ["-hide_banner", "-loglevel", "error", "-nostdin", "-re", "-f", "lavfi", "-i", "anullsrc", "-f", "null", "-"];
+        MediaRuntime.Start(silent, purpose: "screen"); MediaRuntime.Start(silent, purpose: "screen"); var watching = MediaRuntime.Start(silent, purpose: "watch");
+        await Task.Delay(300);
+        Require(MediaRuntime.RunningFor("screen") == 2 && MediaRuntime.RunningFor("watch") == 1, "Helpers are counted by purpose");
+        using (var capture = new VideoCapture()) capture.StopScreen();
+        Require(MediaRuntime.RunningFor("screen") == 0, $"Stopping the screen share ends all its video processes ({MediaRuntime.RunningFor("screen")} left)");
+        Require(MediaRuntime.RunningFor("watch") == 1 && !watching.HasExited, "Stopping your share does not stop watching others");
+        MediaRuntime.Start(silent, purpose: "camera"); await Task.Delay(200);
+        using (var capture = new VideoCapture()) await capture.StopCameraAsync();
+        Require(MediaRuntime.RunningFor("camera") == 0, "Turning the camera off ends its video processes");
+        MediaRuntime.StopAll(); Require(MediaRuntime.Running == 0, "Nothing left after the call");
         for (var delay = 0; delay <= 400; delay += 50)
         {
             var encoder = new VideoEncoder(); var start = encoder.StartAsync(new Size(320, 180), new Size(320, 180), 30);

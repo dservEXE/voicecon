@@ -50,16 +50,28 @@ public static class MediaRuntime
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
-    public static Process Start(IEnumerable<string> args, bool input = false)
+    /// <summary>What each running helper is for ("screen", "camera", "watch"), so stopping one stream ends exactly its helpers.</summary>
+    private static readonly ConcurrentDictionary<int, string> purposes = new();
+    public static Process Start(IEnumerable<string> args, bool input = false, string purpose = "")
     {
         var info = new ProcessStartInfo(Executable) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = input, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var a in args) info.ArgumentList.Add(a);
-        var p = new Process { StartInfo = info, EnableRaisingEvents = true }; p.Start(); children[p.Id] = p;
+        var p = new Process { StartInfo = info, EnableRaisingEvents = true }; p.Start(); children[p.Id] = p; purposes[p.Id] = purpose;
         try { if (job.Value is { } handle && handle != IntPtr.Zero) AssignProcessToJobObject(handle, p.Handle); } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
         return p;
     }
     /// <summary>Stops every helper still running (used when the call ends and nothing should be encoding or decoding).</summary>
     public static void StopAll() { foreach (var pair in children.ToArray()) Stop(pair.Value); }
+    /// <summary>Stops every helper started for <paramref name="purpose"/>; returns how many were still running.</summary>
+    public static int StopFor(string purpose)
+    {
+        var stopped = 0;
+        foreach (var pair in children.ToArray())
+            if (purposes.TryGetValue(pair.Key, out var p) && p == purpose) { if (!HasExited(pair.Value)) stopped++; Stop(pair.Value); }
+        return stopped;
+    }
+    /// <summary>Helpers for <paramref name="purpose"/> still running.</summary>
+    public static int RunningFor(string purpose) => children.Count(pair => purposes.TryGetValue(pair.Key, out var p) && p == purpose && !HasExited(pair.Value));
 
     // Helpers live in a job that closes with Voicecon: even if Voicecon crashes, no encoder is left capturing or sending.
     private static readonly Lazy<IntPtr> job = new(CreateJob);
@@ -86,7 +98,7 @@ public static class MediaRuntime
     public static void Stop(Process? process)
     {
         if (process is null) return;
-        try { children.TryRemove(process.Id, out _); } catch (InvalidOperationException) { }
+        try { children.TryRemove(process.Id, out _); purposes.TryRemove(process.Id, out _); } catch (InvalidOperationException) { }
         try { if (!process.HasExited) { process.Kill(true); process.WaitForExit(1500); } } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException or AggregateException) { }
         try { Interlocked.Add(ref retiredCpu, process.TotalProcessorTime.Ticks); } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
         process.Dispose();
