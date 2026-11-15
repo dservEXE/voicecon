@@ -154,7 +154,7 @@ public sealed partial class MainForm
         var row = Columns(350, 6, 140, 8, -1, 6, 54, 2, 54);
         modePicker.Options.Add(new("Обычный", "24 кбит/с", "Лучшее качество голоса"));
         modePicker.Options.Add(new("Игровой", "16 кбит/с", "Меньше нагрузки на сеть во время игры"));
-        modePicker.Options.Add(new("Эконом", "8 кбит/с", "Минимальный трафик"));
+        modePicker.Options.Add(new("Эконом", "12 кбит/с", "Меньше всего трафика, голос остаётся чистым"));
         modePicker.SetSilently(settings.AudioMode switch { VoiceMode.Normal => 0, VoiceMode.Economy => 2, _ => 1 }); modePicker.AccessibleName = "Режим звонка"; modePicker.Dock = DockStyle.Fill;
         tips.SetToolTip(modePicker, "Режим звонка: применяется к вашему голосу сразу, даже во время разговора");
         row.Controls.Add(modePicker, 0, 0);

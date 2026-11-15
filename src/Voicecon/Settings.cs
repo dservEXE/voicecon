@@ -66,8 +66,14 @@ public sealed class Settings
     [System.Text.Json.Serialization.JsonIgnore]
     public string TurnPassword { get; set; } = "";
 
+    public const string DefaultName = "Игрок";
+    /// <summary>Set once the name has been checked against older copies of the settings (see <see cref="RecoverName"/>).</summary>
+    public bool NameRecoveryChecked { get; set; }
+
     public static readonly string FilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Voicecon", "settings.json");
+    /// <summary>The previous good copy, kept by every save.</summary>
+    public static string PreviousPath(string path) => Path.Combine(Path.GetDirectoryName(path)!, "settings.previous.json");
 
     /// <summary>Path of the backup made when the last load had to fall back to defaults; null if the file was fine.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
@@ -76,21 +82,96 @@ public sealed class Settings
     public static Settings Load() => Load(FilePath);
     public static Settings Load(string path)
     {
-        string json;
+        var value = LoadFile(path);
+        RecoverName(value, path);
+        return value;
+    }
+    private static Settings LoadFile(string path)
+    {
+        if (!File.Exists(path))
+        {
+            // A save interrupted between its two renames leaves only the previous copy.
+            return File.Exists(PreviousPath(path)) && Read(PreviousPath(path)) is { } previousJson && TryParse(previousJson) is { } restored ? restored : new();
+        }
+        var json = Read(path);
+        if (json is not null && TryParse(json) is { } value) return value;
+        // Unreadable or damaged: keep a copy aside, then fall back to the previous good copy before defaults.
+        var backup = Preserve(path);
+        if (Read(PreviousPath(path)) is { } previous && TryParse(previous) is { } older)
+        {
+            AppLog.Info("Файл настроек повреждён, восстановлена предыдущая копия");
+            older.RecoveredFrom = backup; return older;
+        }
+        AppLog.Info("Файл настроек повреждён, используются настройки по умолчанию");
+        return new() { RecoveredFrom = backup };
+    }
+    /// <summary>Reads a file, retrying briefly: right after an update or at Windows start the file can be busy for a moment.</summary>
+    private static string? Read(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try { return File.Exists(path) ? File.ReadAllText(path) : null; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= 8) { AppLog.Error("Не удалось прочитать настройки", ex); return null; }
+                Thread.Sleep(150);
+            }
+        }
+    }
+    /// <summary>
+    /// Earlier versions could fall back to the default name. Once, if the name is the default, look for the name in
+    /// older copies of the settings (the previous copy and set-aside damaged files) and bring it back.
+    /// </summary>
+    private static void RecoverName(Settings value, string path)
+    {
+        if (value.NameRecoveryChecked) return;
+        value.NameRecoveryChecked = true;
+        if (value.Name != DefaultName) return;
         try
         {
-            if (!File.Exists(path)) return new();
-            json = File.ReadAllText(path);
+            var folder = Path.GetDirectoryName(path)!;
+            if (!Directory.Exists(folder)) return;
+            var candidates = Directory.GetFiles(folder, "settings.broken-*.json").Append(PreviousPath(path)).Where(File.Exists).OrderByDescending(File.GetLastWriteTimeUtc);
+            foreach (var file in candidates)
+            {
+                if (Read(file) is not { } json) continue;
+                // Only copies written since 0.6 (they carry a version), so the old shared legacy name never comes back.
+                var (versioned, stored) = ReadNameLoosely(json);
+                if (versioned && CleanName(stored) is { } found && found != DefaultName)
+                {
+                    value.Name = found; AppLog.Info("Имя профиля восстановлено из резервной копии настроек"); return;
+                }
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            AppLog.Error("Не удалось прочитать настройки", ex);
-            return new() { RecoveredFrom = Preserve(path) };
-        }
-        if (TryParse(json) is { } value) return value;
-        AppLog.Info("Файл настроек повреждён, используются настройки по умолчанию");
-        return new() { RecoveredFrom = Preserve(path) };
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
+    /// <summary>Reads the top-level name and version from a settings file even if it is cut off part-way.</summary>
+    private static (bool Versioned, string? Name) ReadNameLoosely(string json)
+    {
+        bool versioned = false; string? name = null;
+        var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(json), new JsonReaderOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
+        try
+        {
+            while (reader.Read())
+            {
+                if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1) continue;
+                var property = reader.GetString();
+                if (!reader.Read()) break;
+                if (property == nameof(ProfileDefaultsVersion) && reader.TokenType == JsonTokenType.Number) versioned = true;
+                else if (property == nameof(Name) && reader.TokenType == JsonTokenType.String) name = reader.GetString();
+                else if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray) reader.Skip();
+            }
+        }
+        catch (JsonException) { }
+        catch (InvalidOperationException) { }
+        return (versioned, name);
+    }
+    private static string? CleanName(string? name)
+    {
+        var text = new string((name ?? "").Where(c => !char.IsControl(c)).ToArray()).Trim();
+        return text.Length == 0 ? null : text[..Math.Min(text.Length, 24)];
+    }
+
     /// <summary>Copies an unusable settings file aside before defaults overwrite it on the next save.</summary>
     private static string? Preserve(string path)
     {
@@ -111,13 +192,47 @@ public sealed class Settings
     public static Settings Parse(string json) => TryParse(json) ?? new();
     private static Settings? TryParse(string json)
     {
-        try
+        JsonDocument schema;
+        try { schema = JsonDocument.Parse(json); } catch (JsonException) { return null; }
+        using (schema)
         {
-            using var schema = JsonDocument.Parse(json);
-            var value = JsonSerializer.Deserialize<Settings>(json) ?? new();
-            var root = schema.RootElement;
+            if (schema.RootElement.ValueKind != JsonValueKind.Object) return null;
+            Settings value;
+            try { value = JsonSerializer.Deserialize<Settings>(json) ?? new(); }
+            catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException or ArgumentException)
+            {
+                // One bad field must not cost the whole profile: take every field that still reads.
+                value = Salvage(schema.RootElement);
+                AppLog.Info("В файле настроек были повреждённые поля, остальные сохранены");
+            }
+            try { return Normalize(value, schema.RootElement); }
+            catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException or ArgumentException or NullReferenceException) { return null; }
+        }
+    }
+    private static Settings Salvage(JsonElement root)
+    {
+        var value = new Settings();
+        foreach (var property in root.EnumerateObject())
+        {
+            var target = typeof(Settings).GetProperty(property.Name);
+            if (target is null || !target.CanWrite || target.GetSetMethod() is null || target.IsDefined(typeof(System.Text.Json.Serialization.JsonIgnoreAttribute), false)) continue;
+            try { if (property.Value.Deserialize(target.PropertyType) is { } field) target.SetValue(value, field); }
+            catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException or ArgumentException) { }
+        }
+        return value;
+    }
+    private static Settings Normalize(Settings value, JsonElement root)
+    {
+        {
+            // Text fields written as null by a damaged file fall back to their defaults.
+            var defaults = new Settings();
+            foreach (var property in typeof(Settings).GetProperties().Where(p => p.PropertyType == typeof(string) && p.CanWrite && p.GetSetMethod() is not null))
+                if (property.GetValue(value) is null) property.SetValue(value, property.GetValue(defaults));
             var version = root.TryGetProperty(nameof(ProfileDefaultsVersion), out _) ? value.ProfileDefaultsVersion : 0;
-            if (version < 1 || string.IsNullOrWhiteSpace(value.Name)) value.Name = "Игрок";
+            value.Name = CleanName(value.Name) ?? DefaultName;
+            // Profiles from before 0.6 carried a shared legacy name; it is replaced once by the neutral one.
+            // Every profile since 0.6 has a version, so later updates never touch a name.
+            if (version < 1) value.Name = DefaultName;
             if (version < 2)
             {
                 // 0.7: shortcuts no longer have defaults. Clear the old factory chords the user never changed.
@@ -148,15 +263,21 @@ public sealed class Settings
             if (value.TalkKey is not (0x56 or 0x14 or 0x05 or 0x06)) value.TalkKey = 0x56;
             return value;
         }
-        catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException or ArgumentException) { return null; }
     }
 
-    public void Save()
+    public void Save() => Save(FilePath);
+    public void Save(string path)
     {
         ProtectedTurnPassword = TurnPassword.Length == 0 ? "" : Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(TurnPassword), null, DataProtectionScope.CurrentUser));
-        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        var temporary = FilePath + ".tmp";
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temporary = path + ".tmp";
         File.WriteAllText(temporary, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-        File.Move(temporary, FilePath, true);
+        // The replaced file becomes the previous copy, so a damaged save can always fall back one step.
+        if (File.Exists(path))
+        {
+            try { File.Replace(temporary, path, PreviousPath(path), true); return; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException) { }
+        }
+        File.Move(temporary, path, true);
     }
 }

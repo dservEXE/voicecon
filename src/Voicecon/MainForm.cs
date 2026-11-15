@@ -133,6 +133,8 @@ public sealed partial class MainForm : Form
         string? notice = settings.RecoveredFrom is { } settingsBackup
             ? "Файл настроек был повреждён, восстановлены настройки по умолчанию. Копия старого файла: " + Path.GetFileName(settingsBackup) + "."
             : null;
+        // Friends see this name in calls; nudge once per start while it is still the neutral default.
+        if (settings.Name == Settings.DefaultName) notice = Join(notice, "Друзья видят вас как «Игрок». Укажите своё имя: Настройки → Профиль.");
         try { groups = new GroupBook(); } catch (Exception ex) { AppLog.Error("Группы недоступны", ex); }
         try { chats = new ChatStore(); } catch (Exception ex) { AppLog.Error("История чата недоступна", ex); notice = Join(notice, "История чата недоступна: " + ex.Message); }
         try { contacts = new ContactBook(); }
@@ -433,7 +435,7 @@ public sealed partial class MainForm : Form
     {
         if (settings.AudioMode == mode) return;
         settings.AudioMode = mode; room?.ApplyAudioSettings(); SaveSettings();
-        SetHint(mode switch { VoiceMode.Normal => "Обычный режим: голос 24 кбит/с, лучшее качество.", VoiceMode.Economy => "Суперэконом: 8 кбит/с, минимум трафика.", _ => "Игровой режим: 16 кбит/с, меньше нагрузки на сеть во время игры." });
+        SetHint(mode switch { VoiceMode.Normal => "Обычный режим: голос 24 кбит/с, лучшее качество.", VoiceMode.Economy => "Эконом: 12 кбит/с пакетами по 60 мс — меньше всего трафика, голос остаётся чистым.", _ => "Игровой режим: 16 кбит/с, меньше нагрузки на сеть во время игры." });
     }
     private void PlayRingtone() { lastRing = Environment.TickCount64; sounds.PlayRing(settings.Ringtone, settings.RingtoneFile, OutputDevice); }
     private int OutputDevice => (speakers.SelectedItem as Device)?.Index ?? -1;
@@ -459,7 +461,7 @@ public sealed partial class MainForm : Form
         room.VideoReceived += (id, name, bytes) => { if (room == current && !current.IsDisposed) ReceiveVideo(id, name, bytes); };
         room.VideoStopped += (id, kind, sequence) => { if (room == current) StopRemoteVideo(id, kind, sequence); };
         room.ParticipantLeft += id => { if (room == current) RemoveVideoParticipant(id); };
-        room.PeerDisconnected += (_, name) => { if (room != current) return; if (current.ConnectedCount > 0) { Cue(NotificationCue.ParticipantLeft); SetHint(name + " вышел из звонка."); } };
+        room.PeerDisconnected += (_, name) => { if (room != current) return; if (current.ConnectedCount > 0) { Cue(NotificationCue.ParticipantLeft); SetHint(ShownName(current, name) + " вышел из звонка."); } };
         room.ParticipantJoined += id =>
         {
             if (room != current) return;
@@ -468,12 +470,12 @@ public sealed partial class MainForm : Form
             contactsTimer.Stop(); contactsTimer.Start();
         };
         room.StreamsChanged += () => { if (room == current) { CloseEndedStreams(); RefreshControls(); } };
-        room.StreamStarted += (_, name, kind) => { if (room == current) { Cue(NotificationCue.StreamStarted); SetHint(name + (kind == 1 ? " показывает экран" : " включил камеру") + " — нажмите «Смотреть», чтобы открыть."); } };
+        room.StreamStarted += (_, name, kind) => { if (room == current) { Cue(NotificationCue.StreamStarted); SetHint(ShownName(current, name) + (kind == 1 ? " показывает экран" : " включил камеру") + " — нажмите «Смотреть», чтобы открыть."); } };
         room.ViewerChanged += (peer, kind, started) =>
         {
             if (room != current) return;
             Cue(started ? NotificationCue.ViewerJoined : NotificationCue.ViewerLeft);
-            var who = current.Participants.FirstOrDefault(p => p.Id == peer)?.Name ?? "Участник";
+            var who = current.Participants.FirstOrDefault(p => p.Id == peer)?.Name is { } announced ? ShownName(current, announced) : "Участник";
             SetHint(who + (started ? " смотрит " : " перестал смотреть ") + (kind == 1 ? "вашу демонстрацию." : "вашу камеру."));
         };
         room.ConversationAnnounced += (groupId, title) =>
@@ -711,6 +713,13 @@ public sealed partial class MainForm : Form
     }
     private static string FormatDuration(TimeSpan span) => span.TotalHours >= 1 ? span.ToString(@"h\:mm\:ss") : span.ToString(@"m\:ss");
 
+    /// <summary>
+    /// In a one-to-one call with a friend the other person is that friend (the call was set up through the keys you
+    /// exchanged), so they are shown under the name you saved, whatever name their app announces.
+    /// In group calls the announced name is shown.
+    /// </summary>
+    private string ShownName(VoiceRoom current, string announced) =>
+        active is { Kind: ContactKind.Friend } conversation && current.People.Count == 1 && Friend(conversation.Id) is { } friend ? friend.Name : announced;
     private void UpdateStrip()
     {
         var chips = new List<CallStrip.Chip>();
@@ -718,8 +727,8 @@ public sealed partial class MainForm : Form
         {
             if (capture.ScreenActive) chips.Add(new CallStrip.OwnStreamChip(1, current.ViewerCount(1), capture.ScreenSize.Height > 0 ? $"{capture.ScreenSize.Height}p · {capture.Fps} к/с" : ""));
             if (capture.CameraActive) chips.Add(new CallStrip.OwnStreamChip(2, current.ViewerCount(2), ""));
-            foreach (var person in current.People) chips.Add(new CallStrip.PersonChip(person.Id, person.Name, person.Connected, person.Connected ? current.PingTo(person.Id) : null));
-            foreach (var stream in current.RemoteStreams) chips.Add(new CallStrip.RemoteStreamChip(stream.PeerId, stream.Name, stream.Kind, streamWindows.ContainsKey(stream.PeerId + ":" + stream.Kind)));
+            foreach (var person in current.People) chips.Add(new CallStrip.PersonChip(person.Id, ShownName(current, person.Name), person.Connected, person.Connected ? current.PingTo(person.Id) : null));
+            foreach (var stream in current.RemoteStreams) chips.Add(new CallStrip.RemoteStreamChip(stream.PeerId, ShownName(current, stream.Name), stream.Kind, streamWindows.ContainsKey(stream.PeerId + ":" + stream.Kind)));
         }
         else if (previewChips.Count > 0) chips.AddRange(previewChips);
         callStrip.SetChips(chips);
@@ -736,7 +745,8 @@ public sealed partial class MainForm : Form
     {
         if (previewMode) return;
         var oldName = settings.Name;
-        settings.Name = string.IsNullOrWhiteSpace(name.Text) ? "Игрок" : name.Text.Trim();
+        // An emptied box keeps the current name rather than resetting it.
+        if (!string.IsNullOrWhiteSpace(name.Text)) settings.Name = name.Text.Trim(); else name.Text = settings.Name;
         settings.Microphone = (microphones.SelectedItem as Device)?.Name ?? settings.Microphone;
         settings.Speakers = (speakers.SelectedItem as Device)?.Name ?? settings.Speakers;
         if (oldName != settings.Name) UpdateSelfCard();

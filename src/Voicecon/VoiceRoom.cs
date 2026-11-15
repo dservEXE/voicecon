@@ -438,7 +438,7 @@ public sealed class VoiceRoom : IDisposable
     public void ApplyAudioSettings()
     {
         foreach (var member in members.Values) member.Session.SetVoiceMode(settings.AudioMode);
-        if (Audio is not null) Audio.TargetBitrate = settings.AudioMode switch { VoiceMode.Gaming => 16000, VoiceMode.Economy => 8000, _ => 24000 };
+        Audio?.ApplyMode(settings.AudioMode);
         foreach (var pair in sharePlayers) { pair.Value.Deafened = deafened; if (members.TryGetValue(pair.Key, out var member)) pair.Value.Volume = AudioLevels.Gain(settings.Volume) * AudioLevels.Gain(member.ShareVolume); }
         if (Audio is null) return;
         Audio.InputGain = AudioLevels.Gain(settings.MicrophoneGain);

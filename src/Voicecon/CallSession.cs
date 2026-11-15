@@ -83,7 +83,7 @@ public sealed class CallSession : IDisposable
     public void Send(byte[] payload)
     {
         if (disposed || State != RTCPeerConnectionState.connected) return;
-        peer.SendAudio(960, payload); // Opus RTP always uses a 48 kHz clock: 20 ms = 960.
+        peer.SendAudio(VoiceJitterBuffer.Duration48k(payload), payload); // Opus RTP counts at 48 kHz: 20 ms = 960, 60 ms = 2880.
         Interlocked.Add(ref sentBytes, payload.Length);
     }
 

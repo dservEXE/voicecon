@@ -74,6 +74,7 @@ internal static class SessionFeatureChecks
             Require(page.Width > 100 && empty == 0, $"Settings page snapshot is fully painted ({empty} of {total} samples empty)");
         }
         drawer.Visible = false;
+        CheckEconomyVoice();
         Console.WriteLine("PASS stream window frames/fullscreen/Esc, 300% sliders, settings drawer, call strip, distinct hang-up vs stop-sharing, draggable segments and switches; no visible windows or capture");
     }
     private static void Prepare(Control c) { _ = c.Handle; c.PerformLayout(); foreach (Control child in c.Controls) Prepare(child); }
@@ -95,6 +96,77 @@ internal static class SessionFeatureChecks
         }
         var pcm = new byte[640]; double sum = 0; for (var i = 0; i < 6; i++) { mixer.Read(pcm, 0, pcm.Length); foreach (var sample in MemoryMarshal.Cast<byte, short>(pcm)) sum += (double)sample * sample; }
         return Math.Sqrt(sum / (320 * 6));
+    }
+    /// <summary>
+    /// Economy mode: the old 8 kbit/s, 20 ms profile against the new 12 kbit/s, 60 ms one on a speech-like signal.
+    /// The new one must keep the upper speech band (clarity) and still send less over the wire, headers included.
+    /// </summary>
+    private static void CheckEconomyVoice()
+    {
+        Require(AudioEngine.Profile(VoiceMode.Economy) == (12000, 960, 10) && AudioEngine.Profile(VoiceMode.Gaming).FrameSamples == 320 && AudioEngine.Profile(VoiceMode.Normal).Bitrate == 24000, "Mode profiles");
+        const int rate = 16000, seconds = 4; var source = new short[rate * seconds]; var random = new Random(7);
+        for (var i = 0; i < source.Length; i++)
+        {
+            // Voiced speech stand-in: a gliding pitch with harmonics up to 7 kHz, syllable-rate loudness and a little breath noise.
+            var t = (double)i / rate; var pitch = 140 + 40 * Math.Sin(2 * Math.PI * 0.7 * t); var envelope = 0.35 + 0.65 * Math.Max(0, Math.Sin(2 * Math.PI * 3.1 * t));
+            double value = 0; for (var h = 1; pitch * h < 7200; h++) value += Math.Sin(2 * Math.PI * pitch * h * t + h) / Math.Sqrt(h);
+            source[i] = (short)Math.Clamp((value * 1500 + (random.NextDouble() - 0.5) * 300) * envelope, short.MinValue, short.MaxValue);
+        }
+        (double High, double WireKbps, int Packets) Run(int bitrate, int frame, int complexity)
+        {
+            using var encoder = OpusCodecFactory.CreateEncoder(rate, 1, OpusApplication.OPUS_APPLICATION_VOIP);
+            encoder.Bitrate = bitrate; encoder.Complexity = complexity; encoder.UseInbandFEC = true; encoder.PacketLossPercent = 5; encoder.SignalType = OpusSignal.OPUS_SIGNAL_VOICE;
+            using var jitter = new VoiceJitterBuffer(); var output = new byte[source.Length * 2]; var bytes = 0; var packets = 0; var buffer = new byte[1275];
+            for (var start = 0; start + frame <= source.Length; start += frame)
+            {
+                var size = encoder.Encode(source.AsSpan(start, frame), frame, buffer.AsSpan(), buffer.Length); bytes += size; packets++;
+                if (frame == 960) Require(VoiceJitterBuffer.Duration48k(buffer.AsSpan(0, size)) == 2880, "A 60 ms packet advances RTP time by 2880");
+                // Packets arrive in real time: one in, one packet's worth of playback out.
+                jitter.Add((ushort)packets, buffer[..size]); jitter.Read(output, start * 2, frame * 2);
+            }
+            Require(jitter.Lost == 0, $"No packet lost at {bitrate} bit/s, {frame / 16} ms");
+            var decoded = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(output.AsSpan());
+            return (HighBand(decoded[(rate / 2)..^(rate / 2)].ToArray()) / HighBand(source[(rate / 2)..^(rate / 2)]), (bytes + packets * 50) * 8.0 / seconds / 1000, packets);
+        }
+        var before = Run(8000, 320, 2); var after = Run(12000, 960, 10);
+        var cost = 0.0;
+        foreach (var (bitrate, frame, complexity) in new[] { (12000, 960, 10) })
+        {
+            using var probe = OpusCodecFactory.CreateEncoder(rate, 1, OpusApplication.OPUS_APPLICATION_VOIP); probe.Bitrate = bitrate; probe.Complexity = complexity; probe.UseInbandFEC = true; probe.PacketLossPercent = 5;
+            var scratch = new byte[1275]; for (var start = 0; start + frame <= rate; start += frame) probe.Encode(source.AsSpan(start, frame), frame, scratch.AsSpan(), scratch.Length);
+            cost = double.MaxValue;
+            for (var pass = 0; pass < 4; pass++)
+            {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                for (var start = 0; start + frame <= source.Length; start += frame) probe.Encode(source.AsSpan(start, frame), frame, scratch.AsSpan(), scratch.Length);
+                if (pass > 0) cost = Math.Min(cost, watch.Elapsed.TotalMilliseconds / seconds / 10);
+            }
+        }
+        Console.WriteLine($"Economy voice: upper band kept {before.High:P0} → {after.High:P0}; on the wire {before.WireKbps:F1} → {after.WireKbps:F1} kbit/s ({before.Packets / seconds} → {after.Packets / seconds} packets/s); encoder {cost:F2}% of one core");
+        Require(cost < 4, "The stronger encoder stays light on the CPU");
+        Require(after.High > before.High * 1.5 && after.High > 0.25, "Economy keeps the upper speech band (4–7 kHz) far better than before");
+        Require(after.WireKbps < before.WireKbps * 0.8, "Economy sends less over the wire than before, packet headers included");
+        // A lost 60 ms packet is concealed for 60 ms, so playback timing does not drift.
+        using (var encoder = OpusCodecFactory.CreateEncoder(rate, 1, OpusApplication.OPUS_APPLICATION_VOIP))
+        using (var jitter = new VoiceJitterBuffer())
+        {
+            encoder.Bitrate = 12000; encoder.UseInbandFEC = true; encoder.PacketLossPercent = 10; var buffer = new byte[1275];
+            for (ushort n = 0; n < 6; n++) { var size = encoder.Encode(source.AsSpan(n * 960, 960), 960, buffer.AsSpan(), buffer.Length); if (n != 2) jitter.Add(n, buffer[..size]); }
+            var pcm = new byte[960 * 2]; for (var i = 0; i < 5; i++) jitter.Read(pcm, 0, pcm.Length);
+            Require(jitter.Lost == 1 && jitter.Recovered == 1, "A lost 60 ms packet is rebuilt from FEC");
+        }
+    }
+    /// <summary>Energy between 4 and 7.5 kHz (what narrowband voice loses), from 512-point DFT frames.</summary>
+    private static double HighBand(short[] samples)
+    {
+        double total = 0;
+        for (var start = 0; start + 512 <= samples.Length; start += 512)
+            for (var k = 128; k < 240; k += 2)
+            {
+                double re = 0, im = 0; for (var n = 0; n < 512; n++) { var angle = 2 * Math.PI * k * n / 512; re += samples[start + n] * Math.Cos(angle); im -= samples[start + n] * Math.Sin(angle); }
+                total += re * re + im * im;
+            }
+        return total;
     }
     [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
 }

@@ -108,6 +108,34 @@ internal static class ResilienceChecks
         var recovered = Settings.Load(file);
         Require(recovered.Name == "Игрок" && recovered.RecoveredFrom is { } backup && File.ReadAllText(backup) == "{\"Name\":\"Команда\",\"Volume\":", "Corrupt settings are copied aside before defaults are used");
         Require(Settings.Parse("{ broken") is { Name: "Игрок" }, "Parse keeps returning defaults for broken JSON");
+
+        // The name must survive everything short of the person changing it.
+        Require(Settings.Parse("{\"ProfileDefaultsVersion\":2,\"Name\":\"Макс\",\"Volume\":\"много\",\"Theme\":null,\"MicrophoneGain\":150}") is { Name: "Макс", Volume: 100, Theme: "graphite", MicrophoneGain: 150 },
+            "One damaged field keeps the name and every other field");
+        Require(Settings.Parse("{\"ProfileDefaultsVersion\":2,\"Name\":\"  \"}").Name == "Игрок" && Settings.Parse("{\"ProfileDefaultsVersion\":2,\"Name\":\"Макс\\u0007\"}").Name == "Макс", "Blank names fall back, control characters are dropped");
+        var saves = Path.Combine(root, "saves"); Directory.CreateDirectory(saves); var saved = Path.Combine(saves, "settings.json");
+        new Settings { Name = "Макс", Volume = 150 }.Save(saved); new Settings { Name = "Макс", Volume = 90 }.Save(saved);
+        Require(File.Exists(Settings.PreviousPath(saved)) && Settings.Load(Settings.PreviousPath(saved)) is { Name: "Макс", Volume: 150 } && Settings.Load(saved) is { Volume: 90 }, "Each save keeps the previous copy");
+        File.WriteAllText(saved, "{\"ProfileDefaultsVersion\":2,\"Name\":");
+        Require(Settings.Load(saved) is { Name: "Макс", Volume: 150, RecoveredFrom: not null }, "A damaged file falls back to the previous copy, not to defaults");
+        File.Delete(saved);
+        Require(Settings.Load(saved) is { Name: "Макс", Volume: 150 }, "A save interrupted between renames restores the previous copy");
+        var busy = Path.Combine(root, "busy"); Directory.CreateDirectory(busy); var busyFile = Path.Combine(busy, "settings.json");
+        new Settings { Name = "Макс" }.Save(busyFile);
+        var locked = new FileStream(busyFile, FileMode.Open, FileAccess.Read, FileShare.None);
+        var release = Task.Run(async () => { await Task.Delay(400); locked.Dispose(); });
+        Require(Settings.Load(busyFile) is { Name: "Макс", RecoveredFrom: null }, "A file busy for a moment is read again, not replaced by defaults");
+        release.Wait();
+        var lost = Path.Combine(root, "lost"); Directory.CreateDirectory(lost); var lostFile = Path.Combine(lost, "settings.json");
+        File.WriteAllText(lostFile, "{\"ProfileDefaultsVersion\":2,\"Name\":\"Игрок\"}");
+        File.WriteAllText(Path.Combine(lost, "settings.broken-20261110-120000.json"), "{\"ProfileDefaultsVersion\":2,\"Name\":\"max19\",\"Volume\":");
+        File.WriteAllText(Path.Combine(lost, "settings.broken-20261101-120000.json"), "{\"Name\":\"Legacy Person\"}");
+        var restored = Settings.Load(lostFile);
+        Require(restored is { Name: "max19", NameRecoveryChecked: true }, "A name lost to the default is found in an older copy of the settings");
+        File.WriteAllText(lostFile, "{\"ProfileDefaultsVersion\":2,\"Name\":\"Игрок\",\"NameRecoveryChecked\":true}");
+        Require(Settings.Load(lostFile).Name == "Игрок", "The recovery runs once, so a later choice of the default name stays");
+        File.Delete(Path.Combine(lost, "settings.broken-20261110-120000.json")); File.WriteAllText(lostFile, "{\"ProfileDefaultsVersion\":2,\"Name\":\"Игрок\"}");
+        Require(Settings.Load(lostFile).Name == "Игрок", "The pre-0.6 shared legacy name is never brought back");
     }
 
     private static void CheckLog(string root)
