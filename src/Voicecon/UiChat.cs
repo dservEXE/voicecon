@@ -75,7 +75,7 @@ public sealed class ChatView : Control
     }
     private void HideSelector()
     {
-        if (!selector.Visible) return;
+        if (selecting is null && !selector.Visible) return;
         selector.Visible = false; selector.SelectionLength = 0; selecting = null; Invalidate();
     }
     private Color Face(ChatRecord record) => record.Mine ? UiTheme.Current.Accent : UiTheme.Blend(UiTheme.Current.Surface, Color.White, 0.025f);

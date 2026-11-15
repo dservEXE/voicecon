@@ -226,9 +226,11 @@ internal static class SessionFeatureChecks
         var press = new Point((int)(text.X + 6), (int)(text.Y + offset + text.Height / 2));
         typeof(ChatView).GetMethod("BeginSelect", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, [first, press]);
         var selector = (TextBox)typeof(ChatView).GetField("selector", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
-        Require(selector.Visible && selector.Text == "Первое сообщение, его можно выделить частично" && selector.ReadOnly && Rectangle.Round(new RectangleF(text.X, text.Y + offset, text.Width, text.Height)) == selector.Bounds, "Pressing a message lays a read-only selection box exactly over its text");
+        bool Selecting() => typeof(ChatView).GetField("selecting", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view) is not null;
+        // The test window is never shown, so "visible" is checked through the view's own state.
+        Require(Selecting() && selector.Text == "Первое сообщение, его можно выделить частично" && selector.ReadOnly && Rectangle.Round(new RectangleF(text.X, text.Y + offset, text.Width, text.Height)) == selector.Bounds, "Pressing a message lays a read-only selection box exactly over its text");
         selector.Select(7, 9); Require(selector.SelectedText == "сообщение", "Part of a message can be selected");
-        view.SetRecords([]); Require(!selector.Visible, "The selection box goes away when the chat changes");
+        view.SetRecords([]); Require(!Selecting() && selector.SelectionLength == 0, "The selection box goes away when the chat changes");
         using var frame = new Bitmap(view.Width, view.Height);
         view.SetRecords([new ChatRecord("a", "Вы", "Прочитано", true, DateTimeOffset.Now)]); view.DrawToBitmap(frame, new Rectangle(Point.Empty, frame.Size));
         var item = items.Cast<object>().First(i => (bool)i.GetType().GetProperty("Day")!.GetValue(i)! == false);

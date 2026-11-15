@@ -76,9 +76,11 @@ internal static class NotificationChecks
         {
             var feedback = new CallAudioFeedback(callSounds); feedback.Update("attempt-a", 0, true, -1, 0);
             Require(Read(callOutput!.Provider!, 48000).Any(s => s != 0), "Outgoing call starts a dial tone");
-            Require(Read(callOutput.Provider!, 96000).All(s => s == 0), "Dial tone has a quiet interval");
+            Require(Read(callOutput.Provider!, 48000).All(s => s == 0), "Dial tone has a quiet interval");
             feedback.Update("attempt-a", 0, true, -1, 1000); Require(Read(callOutput.Provider!, 960).All(s => s == 0), "UI refresh does not restart dial tone");
-            feedback.Update("attempt-a", 0, true, -1, 3200); Require(Read(callOutput.Provider!, 24000).Any(s => s != 0), "Dial repeats while waiting");
+            Require(Read(callOutput.Provider!, 48000 - 960).All(s => s == 0), "The pause runs to the end of the round");
+            // The ringback loops by itself: the next round starts without any restart from the UI.
+            feedback.Update("attempt-a", 0, true, -1, 3200); Require(callSounds.Ringing && Read(callOutput.Provider!, 24000).Any(s => s != 0), "Dial repeats while waiting");
             feedback.Update(null, 0, true, -1, 3300); Read(callOutput.Provider!, 480); Require(Read(callOutput.Provider!, 960).All(s => s == 0), "Answer/cancel stops dial tone with fade");
             feedback.Update(null, 1, true, -1, 3500); Require(Read(callOutput.Provider!, 18720).Any(s => s != 0), "Established connection plays its own cue");
             Read(callOutput.Provider!, 960); feedback.Update(null, 1, true, -1, 3600); Require(Read(callOutput.Provider!, 20000).All(s => s == 0), "Roster/UI updates do not repeat connection cue");
