@@ -13,6 +13,7 @@ public sealed partial class MainForm
     private readonly UiLabel incomingTitle = new(), hint = new(), metrics = new(), volumeValue = new();
     private readonly TextBox name = new(), chatInput = new();
     private readonly UiLabel chatLimitLabel = new();
+    private ColumnStyle? olderColumn;
     private void UpdateChatLimitLabel() => chatLimitLabel.Text = $"Лимит истории: {settings.ChatLimitMb} МБ";
     private readonly ChatView chatView = new();
     private readonly ThemedScrollHost chatHost = new();
@@ -137,7 +138,7 @@ public sealed partial class MainForm
     private Control BuildChatCard()
     {
         var card = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(14, 10, 14, 10) }; var grid = Grid(1); card.Controls.Add(grid);
-        var top = Columns(-1, 170);
+        var top = Columns(-1, 0); olderColumn = top.ColumnStyles[1];
         var titles = Grid(1); AddRow(titles, TextLabel("Чат", 12, TextTone.Normal, true), 24); PrepareLabel(chatLimitLabel, TextTone.Muted); chatLimitLabel.Font = UiTheme.Small; UpdateChatLimitLabel(); AddRow(titles, chatLimitLabel, 18);
         top.Controls.Add(titles, 0, 0);
         PrepareButton(olderMessages, "Показать раньше", UiIcon.Chevron, ButtonTone.Quiet); olderMessages.Font = UiTheme.Small; olderMessages.Visible = false; top.Controls.Add(olderMessages, 1, 0);

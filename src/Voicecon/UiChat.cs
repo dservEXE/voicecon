@@ -247,12 +247,15 @@ public sealed class ChatView : Control
             var c = new PointF(clock.X + clock.Width / 2, clock.Y + clock.Height / 2); g.DrawLine(pen, c, new PointF(c.X, clock.Y + 2.5f * s)); g.DrawLine(pen, c, new PointF(c.X + 2.5f * s, c.Y));
             return;
         }
-        var color = state == MessageState.Read ? ReadTicks : ink;
-        using var tick = new Pen(color, 1.5f * s) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+        // Read ticks are a bright cyan with a thin dark edge, so they stand out on any accent colour.
+        var read = state == MessageState.Read;
+        using var tick = new Pen(read ? ReadTicks : UiTheme.WithAlpha(t.AccentInk, 200), (read ? 1.8f : 1.5f) * s) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+        using var edge = new Pen(Color.FromArgb(110, 8, 20, 48), 3.4f * s) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
         void Check(float x)
         {
-            var y = area.Y + 8 * s;
-            g.DrawLines(tick, [new PointF(x, y), new PointF(x + 3.2f * s, y + 3.4f * s), new PointF(x + 9 * s, y - 3.6f * s)]);
+            var y = area.Y + 8 * s; PointF[] points = [new PointF(x, y), new PointF(x + 3.2f * s, y + 3.4f * s), new PointF(x + 9 * s, y - 3.6f * s)];
+            if (read) g.DrawLines(edge, points);
+            g.DrawLines(tick, points);
         }
         var right = area.Right - 4 * s;
         if (state is MessageState.Delivered or MessageState.Read) { Check(right - 15 * s); Check(right - 10 * s); }

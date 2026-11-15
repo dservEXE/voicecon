@@ -168,6 +168,7 @@ public sealed partial class MainForm
         if (settingsPage.Padding.Left != side) settingsPage.Padding = new Padding(side, 0, side, settingsPage.Padding.Bottom);
         var top = new Padding(side + gutter + (int)(6 * scale), settingsTop.Padding.Top, side + gutter - (int)(4 * scale), 0);
         if (settingsTop.Padding != top) settingsTop.Padding = top;
+        UpdateAvatarControls();
     }
     private static void AddLevel(TableLayoutPanel grid, string title, SlimSlider slider, UiLabel value, int initial)
     {

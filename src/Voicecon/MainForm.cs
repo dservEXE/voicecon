@@ -687,7 +687,7 @@ public sealed partial class MainForm : Form
     {
         IReadOnlyList<ChatRecord> records = selected is null ? [] : previewMode ? previewChat : chats?.LoadRecent(selected.Key, historyLimit + 1) ?? [];
         var more = records.Count > historyLimit; if (more) records = records.Skip(records.Count - historyLimit).ToList();
-        olderMessages.Visible = more;
+        olderMessages.Visible = more; if (olderColumn is not null) olderColumn.Width = more ? 160 : 0; // the title gets the full width otherwise
         if (selected is not null && selected.Key == active?.Key && chats is null) records = records.Concat(chatHistory.Select(line => new ChatRecord(line.Id, line.Name, line.Text, line.IsMine, line.Time))).ToList();
         UpdateChatEmpty(); chatView.SetRecords(records); ScrollChatToEnd();
     }
