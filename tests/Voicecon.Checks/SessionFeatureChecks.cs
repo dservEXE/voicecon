@@ -240,7 +240,8 @@ internal static class SessionFeatureChecks
         var selector = (TextBox)typeof(ChatView).GetField("selector", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
         bool Selecting() => typeof(ChatView).GetField("selecting", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view) is not null;
         // The test window is never shown, so "visible" is checked through the view's own state.
-        Require(Selecting() && selector.Text == "Первое сообщение, его можно выделить частично" && selector.ReadOnly && Rectangle.Round(new RectangleF(text.X, text.Y + offset, text.Width, text.Height)) == selector.Bounds, "Pressing a message lays a read-only selection box exactly over its text");
+        var drawn = Rectangle.Round(new RectangleF(text.X, text.Y + offset, text.Width, text.Height));
+        Require(Selecting() && selector.Text.Replace(Environment.NewLine, "") == "Первое сообщение, его можно выделить частично" && selector.ReadOnly && selector.Location == drawn.Location && selector.Height == drawn.Height && selector.Width >= drawn.Width, "Pressing a message lays a read-only selection box exactly over its text");
         selector.Select(7, 9); Require(selector.SelectedText == "сообщение", "Part of a message can be selected");
         view.SetRecords([]); Require(!Selecting() && selector.SelectionLength == 0, "The selection box goes away when the chat changes");
         using var frame = new Bitmap(view.Width, view.Height);
@@ -250,30 +251,52 @@ internal static class SessionFeatureChecks
         var tickPixels = 0; for (var y = (int)(bubble.Bottom + offset - 22); y < bubble.Bottom + offset - 4; y++) for (var x = (int)(bubble.Right - 30); x < bubble.Right - 4; x++) { var c = frame.GetPixel(x, y); if (c.G > 190 && c.B > 220 && c.R < 170) tickPixels++; }
         Require(tickPixels > 6, "Read messages show coloured ticks");
     }
-    /// <summary>Bubbles stop at a readable width: a long link wraps over lines even on a wide window, and stays whole when copied.</summary>
+    /// <summary>
+    /// Bubbles stop at a readable width; a long link wraps over lines. The selection box shows exactly the drawn lines
+    /// (it never wraps on its own, so the text does not jump when pressed) and copying gives the text back as written.
+    /// </summary>
     private static void CheckLongWords()
     {
         const string link = "https://www.faceit.com/ru/matchmaking/f4148ddd-bce8-41b8-9131-ee83afcdd6dd/Europe%205v5%20Queue";
-        foreach (var width in new[] { 1100, 420 })
+        var wordy = "Заходи на матч, вот ссылка: " + link + " — и не забудь проверить микрофон перед стартом, & всё такое";
+        foreach (var width in new[] { 1100, 620, 420 })
         {
-            using var host = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Location = new Point(-4000, -4000), Size = new Size(width + 20, 400) };
-            var view = new ChatView { Location = Point.Empty, Size = new Size(width, 380) }; host.Controls.Add(view); _ = host.Handle; _ = view.Handle;
-            view.SetRecords([new ChatRecord("a", "max19", link, false, DateTimeOffset.Now.AddMinutes(-1)), new ChatRecord("b", "Вы", "Заходи " + link, true, DateTimeOffset.Now)]);
+            using var host = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Location = new Point(-4000, -4000), Size = new Size(width + 20, 500) };
+            var view = new ChatView { Location = Point.Empty, Size = new Size(width, 480) }; host.Controls.Add(view); _ = host.Handle; _ = view.Handle;
+            view.SetRecords([new ChatRecord("a", "max19", link, false, DateTimeOffset.Now.AddMinutes(-1)), new ChatRecord("b", "Вы", wordy, true, DateTimeOffset.Now)]);
             var items = ((System.Collections.IList)typeof(ChatView).GetField("items", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!).Cast<object>()
                 .Where(i => (bool)i.GetType().GetProperty("Day")!.GetValue(i)! == false).ToList();
-            var line = TextRenderer.MeasureText("Ag", ChatView.MessageFont, Size.Empty, TextFormatFlags.NoPadding).Height;
+            var lineHeight = TextRenderer.MeasureText("Ag", ChatView.MessageFont, Size.Empty, TextFormatFlags.NoPadding).Height;
+            var selector = Get<TextBox>(view, "selector");
+            Require(!selector.WordWrap, "The selection box never wraps on its own");
             foreach (var item in items)
             {
+                var record = (ChatRecord)item.GetType().GetProperty("Record")!.GetValue(item)!;
                 var bubble = (RectangleF)item.GetType().GetProperty("Bounds")!.GetValue(item)!; var text = (RectangleF)item.GetType().GetProperty("TextBounds")!.GetValue(item)!;
-                Require(bubble.Left >= 0 && bubble.Right <= view.Width && bubble.Width <= 480 + 24 + 4, $"A long link keeps a readable bubble width ({bubble.Width:0} px in a {width} px chat)");
-                Require(text.Height >= 2 * line, $"A long link wraps over several lines ({text.Height:0} px, line {line} px, chat {width} px)");
+                var shown = (string)item.GetType().GetProperty("Text")!.GetValue(item)!;
+                Require(bubble.Left >= 0 && bubble.Right <= view.Width && bubble.Width <= 480 + 24 + 4, $"A long message keeps a readable bubble width ({bubble.Width:0} px in a {width} px chat)");
+                Require(text.Height >= 2 * lineHeight, $"A long message wraps over several lines ({text.Height:0} px, chat {width} px)");
+                Require(shown.Split('\n').All(line => TextRenderer.MeasureText(line.TrimEnd(), ChatView.MessageFont, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width <= text.Width), "Every drawn line fits the bubble");
+                var offset = (float)typeof(ChatView).GetProperty("Offset", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
+                typeof(ChatView).GetMethod("BeginSelect", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, [item, new Point((int)text.X + 4, (int)(text.Y + offset + 6))]);
+                Require(selector.Text == shown.Replace("\n", "\r\n"), "The selection box holds exactly the drawn lines, so nothing moves when a message is pressed");
+                // Each drawn line is one line in the box, at the same place.
+                var lines = shown.Split('\n');
+                for (var i = 0; i < lines.Length; i++) Require(selector.GetLineFromCharIndex(selector.GetFirstCharIndexFromLine(i)) == i && selector.Lines[i] == lines[i], $"Line {i + 1} of the box matches the drawn line");
+                selector.SelectAll();
+                string Selected() => (string)typeof(ChatView).GetMethod("SelectedText", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, [])!;
+                Require(Selected() == record.Text, "Copying the whole selection gives the message back as written");
+                var from = selector.Text.IndexOf("matchmaking", StringComparison.Ordinal); var to = selector.Text.IndexOf("Queue", StringComparison.Ordinal) + 5;
+                selector.Select(from, to - from); Require(Selected() == link[link.IndexOf("matchmaking", StringComparison.Ordinal)..], "Copying part of a wrapped link leaves out the added line breaks");
             }
-            var first = items[0]; var bounds = (RectangleF)first.GetType().GetProperty("TextBounds")!.GetValue(first)!;
-            var offset = (float)typeof(ChatView).GetProperty("Offset", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
-            typeof(ChatView).GetMethod("BeginSelect", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, [first, new Point((int)bounds.X + 4, (int)(bounds.Y + offset + 6))]);
-            var selector = Get<TextBox>(view, "selector"); selector.SelectAll();
-            Require(selector.SelectedText == link, "A wrapped link is copied whole");
         }
+        var wrap = typeof(ChatView).GetMethod("WrapLines", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var (plain, none) = ((string, int[]))wrap.Invoke(null, ["Короткое\nв две строки", ChatView.MessageFont, 400])!;
+        Require(plain == "Короткое\nв две строки" && none.Length == 0, "Short lines and the writer's own line breaks are kept as they are");
+        var (emoji, _) = ((string, int[]))wrap.Invoke(null, [string.Concat(Enumerable.Repeat("😀", 60)), ChatView.MessageFont, 120])!;
+        Require(emoji.Split('\n').All(line => line.Length > 0 && !char.IsHighSurrogate(line[^1]) && !char.IsLowSurrogate(line[0])), "Emoji are never cut in half");
+        var (spaced, _) = ((string, int[]))wrap.Invoke(null, ["    " + string.Join(" ", Enumerable.Repeat("слово", 40)), ChatView.MessageFont, 200])!;
+        Require(spaced.Split('\n').All(line => line.Trim().Length > 0), "No line is made of spaces only");
     }
     /// <summary>Clicking your avatar opens its style picker; the settings page no longer has one.</summary>
     private static void CheckAvatarPopup()

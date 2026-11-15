@@ -11,7 +11,11 @@ namespace Voicecon;
 /// </summary>
 public sealed class ChatView : Control
 {
-    private sealed record Item(bool Day, string Text, RectangleF Bounds, RectangleF TextBounds, ChatRecord? Record, string Header, RectangleF HeaderBounds);
+    /// <summary>
+    /// A laid-out entry. <paramref name="Text"/> is the message already split into lines (by <see cref="WrapLines"/>), drawn
+    /// and selected exactly as is; <paramref name="Breaks"/> are the positions of the line breaks added for that (left out when copying).
+    /// </summary>
+    private sealed record Item(bool Day, string Text, RectangleF Bounds, RectangleF TextBounds, ChatRecord? Record, string Header, RectangleF HeaderBounds, int[]? Breaks = null);
     private readonly List<ChatRecord> records = [];
     private readonly List<Item> items = [];
     private float contentHeight;
@@ -25,14 +29,16 @@ public sealed class ChatView : Control
     /// <summary>Raised when "send again" is chosen for a message that failed.</summary>
     public event Action<ChatRecord>? ResendRequested;
     /// <summary>A borderless read-only box laid exactly over a message's text, so part of it can be selected.</summary>
-    private readonly TextBox selector = new() { ReadOnly = true, Multiline = true, BorderStyle = BorderStyle.None, WordWrap = true, Visible = false, TabStop = false, ScrollBars = ScrollBars.None, Cursor = Cursors.IBeam, ShortcutsEnabled = true };
+    private readonly TextBox selector = new() { ReadOnly = true, Multiline = true, BorderStyle = BorderStyle.None, WordWrap = false, Visible = false, TabStop = false, ScrollBars = ScrollBars.None, Cursor = Cursors.IBeam, ShortcutsEnabled = true };
     private Item? selecting;
     private readonly ToolTip tips = new() { InitialDelay = 400, ReshowDelay = 100 };
     private string tipText = "";
     private static readonly Color ReadTicks = Color.FromArgb(120, 226, 255);
     public static readonly Font MessageFont = new("Segoe UI", 10.5f);
     private static readonly Font HeaderFont = new("Segoe UI Semibold", 8.5f);
-    private const TextFormatFlags Wrap = TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPadding | TextFormatFlags.PreserveGraphicsClipping | TextFormatFlags.PreserveGraphicsTranslateTransform;
+    /// <summary>Lines are computed by <see cref="WrapLines"/>, so drawing never wraps on its own (it would wrap differently from the selection box).</summary>
+    private const TextFormatFlags Lines = TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping | TextFormatFlags.PreserveGraphicsTranslateTransform;
+    private const TextFormatFlags OneLine = TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
 
     public ChatView()
     {
@@ -43,14 +49,19 @@ public sealed class ChatView : Control
         selector.KeyDown += (_, e) =>
         {
             if (e.KeyCode == Keys.Escape) { HideSelector(); Focus(); e.Handled = true; }
-            // Nothing selected: Ctrl+C copies the whole message, as before.
-            else if (e.KeyData == (Keys.Control | Keys.C) && selector.SelectionLength == 0 && selecting?.Record is { } record) { Clipboard.SetText(record.Text); e.Handled = true; }
+            // Copies the text as written (without the line breaks added for display); nothing selected copies the whole message.
+            else if (e.KeyData is (Keys.Control | Keys.C) or (Keys.Control | Keys.Insert) && selecting?.Record is { } record)
+            {
+                var copied = selector.SelectionLength == 0 ? record.Text : SelectedText();
+                if (copied.Length > 0) Clipboard.SetText(copied);
+                e.Handled = true; e.SuppressKeyPress = true;
+            }
         };
         var menu = ThemeMenuRenderer.CreateMenu();
         menu.Opening += (_, _) =>
         {
             menu.Items.Clear(); var record = selecting?.Record;
-            var copy = menu.Items.Add("Копировать", null, (_, _) => { if (selector.SelectionLength > 0) Clipboard.SetText(selector.SelectedText); }); copy.Enabled = selector.SelectionLength > 0;
+            var copy = menu.Items.Add("Копировать", null, (_, _) => { var copied = SelectedText(); if (copied.Length > 0) Clipboard.SetText(copied); }); copy.Enabled = selector.SelectionLength > 0;
             menu.Items.Add("Выделить всё", null, (_, _) => selector.SelectAll());
             if (record is not null) menu.Items.Add("Копировать сообщение", null, (_, _) => Clipboard.SetText(record.Text));
         };
@@ -66,12 +77,68 @@ public sealed class ChatView : Control
         var bounds = Rectangle.Round(new RectangleF(item.TextBounds.X, item.TextBounds.Y + offset, item.TextBounds.Width, item.TextBounds.Height));
         selector.BackColor = Face(record); selector.ForeColor = record.Mine ? t.AccentInk : t.Text;
         var text = item.Text.Replace("\n", Environment.NewLine); if (selector.Text != text) selector.Text = text;
-        selector.Bounds = bounds; selector.Visible = true; selector.BringToFront();
+        // A little wider than the text: a space left at the end of a line must not make the box scroll sideways.
+        selector.Bounds = new Rectangle(bounds.X, bounds.Y, bounds.Width + (int)(8 * S), bounds.Height); selector.Visible = true; selector.BringToFront();
         SendMessage(selector.Handle, 0x00D3, (IntPtr)3, IntPtr.Zero); // EM_SETMARGINS: none, so the text sits exactly where it was drawn
         selector.Focus();
         var local = new Point(press.X - bounds.X, press.Y - bounds.Y);
         SendMessage(selector.Handle, LeftButtonDown, (IntPtr)1, (IntPtr)((local.Y << 16) | (local.X & 0xFFFF)));
         Invalidate(Rectangle.Ceiling(new RectangleF(item.Bounds.X, item.Bounds.Y + offset, item.Bounds.Width, item.Bounds.Height)));
+    }
+    /// <summary>The selected part of the message as it was written: line breaks added only for display are left out.</summary>
+    internal string SelectedText()
+    {
+        var start = selector.SelectionStart; var length = selector.SelectionLength;
+        if (length <= 0) return "";
+        if (selecting is not { Breaks: { Length: > 0 } breaks } item) return selector.SelectedText;
+        // The box holds the drawn text with "\r\n" for every line break; find where the added ones landed.
+        var added = new HashSet<int>(); var newlines = 0; var next = 0;
+        for (var i = 0; i < item.Text.Length; i++)
+        {
+            if (next < breaks.Length && breaks[next] == i) { added.Add(i + newlines); added.Add(i + newlines + 1); next++; }
+            if (item.Text[i] == '\n') newlines++;
+        }
+        var text = selector.Text; var result = new System.Text.StringBuilder(length);
+        for (var i = start; i < start + length && i < text.Length; i++) if (!added.Contains(i)) result.Append(text[i]);
+        return result.ToString();
+    }
+    /// <summary>
+    /// Splits a message into lines no wider than <paramref name="width"/>: at spaces, and inside a word too long for a whole
+    /// line (a link), preferably after / - ? &amp; = _ . , ; :. Returns the text with line breaks and where the added ones are.
+    /// The same lines are drawn and shown in the selection box, so the text never moves when selected.
+    /// </summary>
+    internal static (string Text, int[] Breaks) WrapLines(string text, Font font, int width)
+    {
+        static int Measure(string s, Font f) => s.Length == 0 ? 0 : TextRenderer.MeasureText(s, f, Size.Empty, OneLine).Width;
+        if (width < 16 || Measure(text.Replace('\n', ' '), font) <= width && !text.Contains('\n')) return (text, []);
+        var result = new System.Text.StringBuilder(text.Length + 16); var breaks = new List<int>(); var first = true;
+        foreach (var paragraph in text.Split('\n'))
+        {
+            if (!first) result.Append('\n'); first = false;
+            var rest = paragraph;
+            while (Measure(rest.TrimEnd(), font) > width)
+            {
+                // Break opportunities: just after a run of spaces. Take the furthest one whose line still fits.
+                var cuts = new List<int>();
+                var start = rest.Length - rest.TrimStart(' ').Length + 1; // never a line of spaces only
+                for (var i = start; i < rest.Length; i++) if (rest[i - 1] == ' ' && rest[i] != ' ') cuts.Add(i);
+                int low = 0, high = cuts.Count - 1, cut = -1;
+                while (low <= high) { var mid = (low + high) / 2; if (Measure(rest[..cuts[mid]].TrimEnd(), font) <= width) { cut = cuts[mid]; low = mid + 1; } else high = mid - 1; }
+                if (cut < 0)
+                {
+                    // The first word alone is too wide: the longest start of it that fits, moved back to a natural break if one is near.
+                    int a = 1, b = rest.Length - 1;
+                    while (a < b) { var mid = (a + b + 1) / 2; if (Measure(rest[..mid], font) <= width) a = mid; else b = mid - 1; }
+                    cut = a;
+                    for (var k = a; k > Math.Max(1, a * 2 / 3); k--) if ("/-?&=_.,;:".Contains(rest[k - 1])) { cut = k; break; }
+                    if (cut > 1 && char.IsHighSurrogate(rest[cut - 1])) cut--;
+                }
+                result.Append(rest, 0, cut); breaks.Add(result.Length); result.Append('\n');
+                rest = rest[cut..];
+            }
+            result.Append(rest);
+        }
+        return breaks.Count == 0 ? (text, []) : (result.ToString(), breaks.ToArray());
     }
     private void HideSelector()
     {
@@ -133,12 +200,13 @@ public sealed class ChatView : Control
                 headerBounds = new RectangleF(side + 6 * s, y, Width - 2 * side - 12 * s, 18 * s); y += 20 * s;
             }
             var text = record.Text.Replace("\r\n", "\n").Replace('\r', '\n');
-            var measured = TextRenderer.MeasureText(text.Length == 0 ? " " : text, MessageFont, new Size((int)(maxBubble - 2 * padX), int.MaxValue), Wrap);
+            var (lines, breaks) = WrapLines(text, MessageFont, (int)(maxBubble - 2 * padX)); text = lines;
+            var measured = TextRenderer.MeasureText(text.Length == 0 ? " " : text, MessageFont, Size.Empty, Lines);
             var ticks = record.Mine ? 24 * s : 0;
             var bubbleW = Math.Max(44 * s, measured.Width + 2 * padX + 2 + ticks); var bubbleH = measured.Height + 2 * padY;
             var x = record.Mine ? Width - side - bubbleW : side;
             var bubble = new RectangleF(x, y, bubbleW, bubbleH);
-            items.Add(new Item(false, text, bubble, new RectangleF(x + padX, y + padY, bubbleW - 2 * padX + 2, measured.Height + 2), record, header, headerBounds));
+            items.Add(new Item(false, text, bubble, new RectangleF(x + padX, y + padY, bubbleW - 2 * padX + 2, measured.Height + 2), record, header, headerBounds, breaks.Length > 0 ? breaks : null));
             y += bubbleH + 8 * s; previous = record;
         }
         contentHeight = y + 10 * s;
@@ -226,7 +294,7 @@ public sealed class ChatView : Control
             else Neu.Raised(g, bounds, radius, s, Neu.SmallDepth, record == focused && !selected ? UiTheme.Blend(t.Surface, Color.White, 0.05f) : Face(record), rim: 1);
             if (record.Mine) DrawTicks(g, TickArea(item, offset), StateOf?.Invoke(record.Id) ?? MessageState.None, t, s);
             var textRect = Rectangle.Round(new RectangleF(item.TextBounds.X, item.TextBounds.Y + offset, item.TextBounds.Width, item.TextBounds.Height));
-            TextRenderer.DrawText(g, item.Text, MessageFont, textRect, record.Mine ? t.AccentInk : t.Text, Wrap);
+            TextRenderer.DrawText(g, item.Text, MessageFont, textRect, record.Mine ? t.AccentInk : t.Text, Lines);
         }
     }
     /// <summary>Clock while sending, one tick sent, two ticks delivered, two coloured ticks read, a red mark if not sent.</summary>
