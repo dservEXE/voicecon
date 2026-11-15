@@ -24,6 +24,9 @@ public sealed class Settings
     /// <summary>Soft drifting colour pools on the window canvas.</summary>
     public bool BackgroundGlow { get; set; } = true;
     public string LastConversation { get; set; } = "";
+    /// <summary>Chat history size on this PC, 100-500 MB; the oldest messages go first.</summary>
+    public int ChatLimitMb { get; set; } = 300;
+    public const int ChatLimitMin = 100, ChatLimitMax = 500;
     /// <summary>Newest delivery event already received, so offline messages are fetched once.</summary>
     public long MailboxSince { get; set; }
     /// <summary>Screen sharing: optimized · quality · custom.</summary>
@@ -261,6 +264,7 @@ public sealed class Settings
                 catch (Exception ex) when (ex is CryptographicException or FormatException) { value.ProtectedTurnPassword = ""; }
             }
             if (value.TalkKey is not (0x56 or 0x14 or 0x05 or 0x06)) value.TalkKey = 0x56;
+            value.ChatLimitMb = Math.Clamp(value.ChatLimitMb / 50 * 50, ChatLimitMin, ChatLimitMax);
             return value;
         }
     }

@@ -242,7 +242,7 @@ public sealed class SelfCard : Control
 public sealed class CallStrip : Control
 {
     public abstract record Chip(string Key);
-    public sealed record PersonChip(string Id, string Name, bool Connected, double? Ping) : Chip("p:" + Id);
+    public sealed record PersonChip(string Id, string Name, bool Connected, double? Ping, string? Avatar = null) : Chip("p:" + Id);
     public sealed record RemoteStreamChip(string PeerId, string Name, byte Kind, bool Watching) : Chip("s:" + PeerId + ":" + Kind);
     public sealed record OwnStreamChip(byte Kind, int Viewers, string Details) : Chip("o:" + Kind);
     private List<Chip> chips = [];
@@ -322,8 +322,8 @@ public sealed class CallStrip : Control
                 {
                     ChipFace(g, bounds, radius, s, hot);
                     var avatar = new RectangleF(bounds.X + 6 * s, bounds.Y + 6 * s, 34 * s, 34 * s);
-                    if (!p.Connected) { using var fade = new SolidBrush(Color.FromArgb(120, t.Surface)); Neu.Avatar(g, avatar, p.Id, p.Name, depth: 0); g.FillEllipse(fade, avatar); }
-                    else Neu.Avatar(g, avatar, p.Id, p.Name, depth: 0);
+                    if (!p.Connected) { using var fade = new SolidBrush(Color.FromArgb(120, t.Surface)); Neu.Avatar(g, avatar, p.Avatar ?? p.Id, p.Name, depth: 0); g.FillEllipse(fade, avatar); }
+                    else Neu.Avatar(g, avatar, p.Avatar ?? p.Id, p.Name, depth: 0);
                     TextRenderer.DrawText(g, p.Name, UiTheme.Strong, new Rectangle((int)(avatar.Right + 8 * s), (int)bounds.Y, (int)(bounds.Right - avatar.Right - 16 * s), (int)(bounds.Height * 0.62f)), p.Connected ? t.Text : t.Muted, flags);
                     var detail = !p.Connected ? "соединяем…" : p.Ping is { } ms ? $"{ms:0} мс · громкость" : "громкость";
                     TextRenderer.DrawText(g, detail, UiTheme.Small, new Rectangle((int)(avatar.Right + 8 * s), (int)(bounds.Y + bounds.Height * 0.5f), (int)(bounds.Right - avatar.Right - 16 * s), (int)(bounds.Height * 0.42f)), t.Muted, flags);
@@ -449,5 +449,61 @@ public sealed class GlyphMark : Control
         var r = new RectangleF((Width - side) / 2, (Height - side) / 2, side, side);
         Neu.Inset(e.Graphics, r, side / 2, s, 0.6f);
         UiIcons.Draw(e.Graphics, Glyph, RectangleF.Inflate(r, -side * 0.22f, -side * 0.22f), UiTheme.Current.Accent);
+    }
+}
+
+/// <summary>Your avatar, large, as friends will see it.</summary>
+public sealed class AvatarPreview : Control
+{
+    private string id = "", name = "";
+    public AvatarPreview() { SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque | ControlStyles.ResizeRedraw, true); BackColor = UiTheme.Current.Surface; }
+    public void Set(string id, string name) { this.id = id; this.name = name; Invalidate(); }
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        Backdrop.Paint(e.Graphics, this, ClientRectangle);
+        var s = DeviceDpi / 96f; var side = Math.Min(Width, Height) - 14 * s; if (side < 8) return;
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        Neu.Avatar(e.Graphics, new RectangleF((Width - side) / 2, (Height - side) / 2, side, side), id, name, depth: Neu.ButtonDepth);
+    }
+}
+
+/// <summary>Avatar colours: the first disc is automatic (follows your id), the rest are fixed choices.</summary>
+public sealed class AvatarColorPicker : Control
+{
+    private int selected = -1, hovered = -2; private string id = "";
+    public event Action<Color?>? ColorChosen;
+    public AvatarColorPicker() { SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true); BackColor = UiTheme.Current.Surface; Cursor = Cursors.Hand; TabStop = true; AccessibleName = "Цвет аватарки"; }
+    /// <summary>Shows the current choice: null = automatic.</summary>
+    public void Set(string profileId, Color? color) { id = profileId; selected = color is { } c ? Array.FindIndex(Avatars.Palette, p => p.ToArgb() == c.ToArgb()) : -1; Invalidate(); }
+    private int Count => Avatars.Palette.Length + 1;
+    private RectangleF Swatch(int i)
+    {
+        var s = DeviceDpi / 96f; var gap = 10 * s; var size = Math.Min(30 * s, Math.Min(Height - 14 * s, (Width - 12 * s - gap * (Count - 1)) / Count));
+        return new RectangleF(6 * s + i * (size + gap), (Height - size) / 2, size, size);
+    }
+    private int Hit(Point p) { for (var i = 0; i < Count; i++) if (RectangleF.Inflate(Swatch(i), 4, 4).Contains(p)) return i - 1; return -2; }
+    protected override void OnMouseMove(MouseEventArgs e) { var hit = Hit(e.Location); if (hit != hovered) { hovered = hit; Invalidate(); } base.OnMouseMove(e); }
+    protected override void OnMouseLeave(EventArgs e) { hovered = -2; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseClick(MouseEventArgs e) { var hit = Hit(e.Location); if (hit >= -1) Choose(hit); base.OnMouseClick(e); }
+    private void Choose(int index) { selected = index; Invalidate(); ColorChosen?.Invoke(index < 0 ? null : Avatars.Palette[index]); }
+    protected override bool IsInputKey(Keys keyData) => keyData is Keys.Left or Keys.Right || base.IsInputKey(keyData);
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode is Keys.Left or Keys.Right) { Choose(Math.Clamp(selected + (e.KeyCode == Keys.Left ? -1 : 1), -1, Avatars.Palette.Length - 1)); e.Handled = true; }
+        base.OnKeyDown(e);
+    }
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        Backdrop.Paint(e.Graphics, this, ClientRectangle);
+        var g = e.Graphics; var s = DeviceDpi / 96f; g.SmoothingMode = SmoothingMode.AntiAlias; var t = UiTheme.Current;
+        for (var i = -1; i < Avatars.Palette.Length; i++)
+        {
+            var r = Swatch(i + 1); var color = i < 0 ? UiTheme.AvatarColor(id) : Avatars.Palette[i];
+            if (i == selected) Neu.Inset(g, r, r.Width / 2, s, 0.8f, color);
+            else Neu.Raised(g, r, r.Width / 2, s, i == hovered ? Neu.ButtonDepth : Neu.SmallDepth, color, convex: 0.8f, rim: 1);
+            if (i < 0) TextRenderer.DrawText(g, "А", UiTheme.Small, Rectangle.Round(r), Color.FromArgb(235, 255, 255, 255), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.PreserveGraphicsClipping);
+            if (i == selected) { using var ring = new Pen(UiTheme.WithAlpha(t.Accent, 220), 1.6f * s); g.DrawEllipse(ring, RectangleF.Inflate(r, 3.5f * s, 3.5f * s)); }
+        }
+        if (Focused && ShowFocusCues) { var r = Swatch(selected + 1); Neu.Focus(g, RectangleF.Inflate(r, 5 * s, 5 * s), r.Width / 2 + 5 * s, s); }
     }
 }

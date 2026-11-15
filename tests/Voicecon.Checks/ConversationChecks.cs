@@ -46,7 +46,17 @@ internal static class ConversationChecks
         Require(store.LoadRecent("g:team", 50).Count == 1, "Record copied from another conversation is rejected");
         var reopened = new ChatStore(folder);
         Require(reopened.LoadRecent("f:alice", 100).Count == 25 && reopened.TotalBytes > 0, "History survives restart with the DPAPI-protected key");
-        reopened.Clear(); Require(reopened.LoadRecent("f:alice", 5).Count == 0 && reopened.TotalBytes == 0, "Clear removes local history");
+        // Ticks: your messages only move forward; theirs remember the author for the read receipt.
+        Require(reopened.SetState("f:alice", "m1", MessageState.Sending) && reopened.SetState("f:alice", "m1", MessageState.Sent) && reopened.SetState("f:alice", "m1", MessageState.Read), "Sent message moves forward to read");
+        Require(!reopened.SetState("f:alice", "m1", MessageState.Delivered) && reopened.State("f:alice", "m1") == MessageState.Read, "A late delivery receipt does not undo read");
+        Require(reopened.SetState("f:alice", "m2", MessageState.Failed) && reopened.SetState("f:alice", "m2", MessageState.Delivered), "A failed message can still be delivered");
+        reopened.SetState("f:alice", "in1", MessageState.Received, "0123456789abcdef0123456789abcdef");
+        Require(reopened.WithState("f:alice", MessageState.Received).Single() == "in1" && reopened.Sender("f:alice", "in1") == "0123456789abcdef0123456789abcdef", "Incoming message keeps its author");
+        var again = new ChatStore(folder);
+        Require(again.State("f:alice", "m1") == MessageState.Read && again.Sender("f:alice", "in1") is not null, "Ticks survive restart");
+        Require(!File.ReadAllText(Path.Combine(folder, "states.bin"), Encoding.Latin1).Contains("alice"), "Ticks are stored encrypted");
+        reopened = again;
+        reopened.Clear(); Require(reopened.LoadRecent("f:alice", 5).Count == 0 && reopened.TotalBytes == 0 && reopened.State("f:alice", "m1") == MessageState.None, "Clear removes local history and its ticks");
     }
 
     private static void CheckLimit(string root)
@@ -58,6 +68,8 @@ internal static class ConversationChecks
         for (var i = 0; i < 80; i++) store.Append("f:old", new ChatRecord(i.ToString(), "Старый", text + i, false, start.AddMinutes(i)));
         for (var i = 0; i < 80; i++) store.Append("f:new", new ChatRecord(i.ToString(), "Новый", text + i, false, start.AddDays(1).AddMinutes(i)));
         Require(store.TotalBytes <= store.Limit, $"Store stays under its limit ({store.TotalBytes} > {store.Limit})");
+        var before = store.TotalBytes; store.Limit = 24 * 1024;
+        Require(store.TotalBytes <= 24 * 1024 && store.TotalBytes < before && store.LoadRecent("f:new", 1).Count == 1, "Lowering the limit trims the oldest messages at once");
         var newest = store.LoadRecent("f:new", 1000);
         Require(newest.Count > 0 && newest[^1].Text.EndsWith("79"), "Newest messages are kept");
         var old = store.LoadRecent("f:old", 1000);
@@ -101,6 +113,7 @@ internal static class ConversationChecks
 
     private static void CheckSettingsMigration()
     {
+        Require(new Settings().ChatLimitMb == 300 && Settings.Parse("{\"ProfileDefaultsVersion\":2,\"ChatLimitMb\":9000}").ChatLimitMb == 500 && Settings.Parse("{\"ProfileDefaultsVersion\":2,\"ChatLimitMb\":20}").ChatLimitMb == 100 && Settings.Parse("{\"ProfileDefaultsVersion\":2,\"ChatLimitMb\":260}").ChatLimitMb == 250, "Chat history limit: 300 MB by default, 100–500 in steps of 50");
         var old = Settings.Parse($"{{\"ProfileDefaultsVersion\":1,\"Name\":\"Игрок 2\",\"MicrophoneHotkey\":{(int)(Keys.Control | Keys.Shift | Keys.M)},\"HeadphonesHotkey\":{(int)Keys.G},\"Animations\":false,\"AudioMode\":0}}");
         Require(old.MicrophoneHotkey == 0 && old.HeadphonesHotkey == (int)Keys.G, "Old factory shortcut cleared, user's own shortcut kept");
         Require(old.AnimationLevel == "off" && old.AudioMode == VoiceMode.Normal && old.Name == "Игрок 2", "Animation choice and explicit voice mode survive migration");

@@ -12,10 +12,14 @@ public sealed class UiSounds : IDisposable
     private static readonly Lazy<NotificationClip> birdMachineRing = new(() => CreateEmbeddedRingtone("Voicecon.Ringtone.BirdMachine"));
     private static readonly Lazy<NotificationClip> dial = new(CreateDial);
     private static readonly NotificationClip callEnded = CreateCallEnded();
-    public void PlayDial(int outputDevice) => Start(dial.Value, outputDevice, true);
+    /// <summary>Ringback while we call someone: repeats until the call is answered or cancelled.</summary>
+    public void PlayDial(int outputDevice) => Start(dial.Value, outputDevice, true, 0);
+    /// <summary>True while a ringtone or ringback is sounding.</summary>
+    public bool Ringing => mixer.Ringing;
     public void PlayConnected(int outputDevice) => PlayCue(NotificationCue.CallConnected, outputDevice);
     public void PlayCallEnded(int outputDevice) => Start(callEnded, outputDevice, false);
-    public static void WarmRingtones() => _ = Task.Run(() => { _ = borisRing.Value; _ = birdMachineRing.Value; });
+    /// <summary>Decodes the chosen ringtone in the background (a whole song is ~16 MB of samples, so only the one in use).</summary>
+    public static void WarmRingtones(string kind) => _ = Task.Run(() => { if (kind == "boris") _ = borisRing.Value; else if (kind == "birdmachine") _ = birdMachineRing.Value; });
     private readonly object gate = new();
     private readonly NotificationMixer mixer = new();
     public int VolumePercent { set => mixer.MasterGain = AudioLevels.Gain(value); }
@@ -29,7 +33,7 @@ public sealed class UiSounds : IDisposable
     public void Play(bool microphoneEnabled, int outputDevice) => PlayCue(microphoneEnabled ? NotificationCue.MicrophoneOn : NotificationCue.MicrophoneOff, outputDevice);
     public void PlayHeadphones(bool headphonesEnabled, int outputDevice) => PlayCue(headphonesEnabled ? NotificationCue.HeadphonesOn : NotificationCue.HeadphonesOff, outputDevice);
     public void PlayCue(NotificationCue cue, int outputDevice) => Start(cues[(int)cue], outputDevice, false);
-    public void PlayRing(string kind, string customFile, int outputDevice)
+    public void PlayRing(string kind, string customFile, int outputDevice, bool loop = true)
     {
         var clip = kind switch { "boris" => borisRing.Value, "birdmachine" => birdMachineRing.Value, "soft" => softRing.Value, _ => bell.Value };
         if (kind == "custom")
@@ -49,7 +53,7 @@ public sealed class UiSounds : IDisposable
                         if (samples.WaveFormat.SampleRate != 48000) samples = new WdlResamplingSampleProvider(samples, 48000);
                         if (samples.WaveFormat.Channels == 1) samples = new MonoToStereoSampleProvider(samples);
                         var data = new List<float>(); var chunk = new float[4096]; int read;
-                        while (data.Count < 48000 * 2 * 30 && (read = samples.Read(chunk, 0, Math.Min(chunk.Length, 48000 * 2 * 30 - data.Count))) > 0) data.AddRange(chunk.AsSpan(0, read).ToArray());
+                        while (data.Count < 48000 * 2 * 60 && (read = samples.Read(chunk, 0, Math.Min(chunk.Length, 48000 * 2 * 60 - data.Count))) > 0) data.AddRange(chunk.AsSpan(0, read).ToArray());
                         if (data.Count == 0) throw new InvalidDataException();
                         custom = new NotificationClip(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(data)); customPath = file.FullName; customStamp = file.LastWriteTimeUtc; customLength = file.Length;
                     }
@@ -58,12 +62,14 @@ public sealed class UiSounds : IDisposable
             }
             catch { } // Invalid custom recordings fall back to the built-in bell.
         }
-        Start(clip, outputDevice, true);
+        // The whole ringtone plays, then repeats after a short pause until the call is answered, declined or missed.
+        Start(clip, outputDevice, true, loop ? RingPauseMs : -1);
     }
+    public const int RingPauseMs = 700;
     public void Stop() { mixer.SetCue(null); mixer.SetRing(null); }
     public void StopCue() => mixer.SetCue(null);
     public void StopRing() => mixer.SetRing(null);
-    private void Start(NotificationClip clip, int outputDevice, bool ring)
+    private void Start(NotificationClip clip, int outputDevice, bool ring, int loopGapMs = -1)
     {
         lock (gate)
         {
@@ -76,7 +82,7 @@ public sealed class UiSounds : IDisposable
                     player = createPlayer(outputDevice); device = outputDevice; failed = false;
                     player.PlaybackStopped += OnStopped; player.Init(mixer);
                 }
-                if (ring) mixer.SetRing(clip); else mixer.SetCue(clip);
+                if (ring) mixer.SetRing(clip, loopGapMs); else mixer.SetCue(clip);
                 if (player.PlaybackState != PlaybackState.Playing) player.Play();
             }
             catch { CloseOutput(); mixer.Clear(); } // A notification must never prevent a mute action.
@@ -105,7 +111,7 @@ public sealed class UiSounds : IDisposable
             if (samples.WaveFormat.Channels is not (1 or 2)) throw new InvalidDataException();
             if (samples.WaveFormat.SampleRate != 48000) samples = new WdlResamplingSampleProvider(samples, 48000);
             if (samples.WaveFormat.Channels == 1) samples = new MonoToStereoSampleProvider(samples);
-            var data = new float[48000 * 2 * 8]; var count = 0;
+            var data = new float[48000 * 2 * 60]; var count = 0;
             while (count < data.Length)
             {
                 var read = samples.Read(data, count, data.Length - count);
@@ -114,7 +120,7 @@ public sealed class UiSounds : IDisposable
             }
             if (count == 0) throw new InvalidDataException();
             Array.Resize(ref data, count);
-            for (var i = 0; i < data.Length; i++) data[i] *= 0.42f;
+            for (var i = 0; i < data.Length; i++) data[i] *= 0.5f;
             return new NotificationClip(data);
         }
         catch { return bell.Value; }
@@ -230,7 +236,7 @@ public sealed class UiSounds : IDisposable
             var tremolo = 0.82 + 0.18 * Math.Sin(2 * Math.PI * 4 * i / 48000);
             synth.Data[i * 2] *= (float)tremolo; synth.Data[i * 2 + 1] *= (float)tremolo;
         }
-        return synth.Muffle(1400).Build(0.075, 2000);
+        return synth.Muffle(1400).Build(0.095, 2000);
     }
     /// <summary>"Мягкий звонок": a slow bubbling arpeggio that repeats.</summary>
     private static NotificationClip CreateWaterRing()

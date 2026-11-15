@@ -24,6 +24,14 @@ internal static class UiRenders
         UiTheme.Select("graphite");
         using (var call = new MainForm(true, "graphite")) { Prepare(call); Invoke(call, "ShowPreviewCall"); Save(call, Path.Combine(directory, "in-call.png")); }
         using (var compact = new MainForm(true, "graphite")) { compact.Size = compact.MinimumSize; Save(compact, Path.Combine(directory, "compact.png")); }
+        foreach (var (name, mini, narrow) in new[] { ("stage", false, false), ("stage-mini", true, false), ("stage-narrow", false, true) })
+        {
+            using var watch = new MainForm(true, "graphite"); if (narrow) watch.Size = watch.MinimumSize;
+            Prepare(watch); Invoke(watch, "ShowPreviewCall"); watch.GetType().GetMethod("ShowPreviewStage", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(watch, [mini]);
+            var stage = (StageView)watch.GetType().GetField("stage", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(watch)!;
+            typeof(StageView).GetField("hover", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(stage, true);
+            Save(watch, Path.Combine(directory, name + ".png"));
+        }
         using (var settings = new MainForm(true, "graphite"))
         {
             // Overlapping siblings print in reverse z-order with DrawToBitmap, so the drawer is captured on its own.

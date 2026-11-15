@@ -31,6 +31,26 @@ public sealed class VoiceRoom : IDisposable
     public event Action<string>? Status;
     public event Action<string>? Error;
     public event Action<ChatLine>? ChatReceived;
+    /// <summary>A participant shared their avatar: member id, their profile id, colour and photo bytes (JPEG/PNG), each optional.</summary>
+    public event Action<string, string, Color?, byte[]?>? AvatarReceived;
+    private Message? ownAvatar;
+    /// <summary>Our avatar, sent to everyone in the call now and to anyone who joins later.</summary>
+    public void SetOwnAvatar(string profile, Color? color, byte[]? photo)
+    {
+        ownAvatar = new Message { Type = "avatar", Code = profile, Text = color is { } c ? Avatars.Hex(c) : "", Photo = photo is { Length: > 0 } ? Convert.ToBase64String(photo) : null };
+        foreach (var member in members.Values.Where(m => m.Connected)) Send(member, ownAvatar);
+    }
+    /// <summary>A participant got (or read) chat messages: their member id and the receipt.</summary>
+    public event Action<string, Receipt>? ReceiptReceived;
+    /// <summary>Tells the author of call-chat messages that they arrived or were read: directly, or through the host.</summary>
+    public void SendReceipt(string toMember, Receipt receipt)
+    {
+        var message = new Message { Type = "receipt", Text = receipt.Encode() };
+        if (members.TryGetValue(toMember, out var member) && member.Connected) { Send(member, message); return; }
+        if (!IsHost && hostLink is { Connected: true }) { message.To = toMember; Send(hostLink, message); }
+    }
+    /// <summary>The profile id a participant announced with their avatar, if any.</summary>
+    public string? ProfileOf(string memberId) => members.TryGetValue(memberId, out var member) ? member.Profile : null;
     public event Action<string, string, byte[]>? VideoReceived;
     public event Action<string, byte, uint>? VideoStopped;
     public event Action<string>? ParticipantLeft;
@@ -248,6 +268,7 @@ public sealed class VoiceRoom : IDisposable
     private void OnReady(Member member)
     {
         Send(member, new Message { Type = "caps", Text = Capabilities });
+        if (ownAvatar is not null) Send(member, ownAvatar);
         if (outgoingShareStream != 0) Send(member, new Message { Type = "share-audio-start", AudioStream = outgoingShareStream });
         foreach (var stream in ownStreams.Values) Send(member, new Message { Type = "video-start", VideoKind = stream.Kind, Width = stream.Width, Height = stream.Height, Fps = stream.Fps });
         if (!member.HostConnection) return;
@@ -261,6 +282,24 @@ public sealed class VoiceRoom : IDisposable
         if (message is null) return;
         switch (message.Type)
         {
+            case "avatar" when Avatars.ValidId(message.Code):
+            {
+                byte[]? photo = null;
+                if (message.Photo is { Length: > 0 and <= (Avatars.MaxSharedBytes + 2) / 3 * 4 } encoded)
+                    try { photo = Convert.FromBase64String(encoded); } catch (FormatException) { }
+                source.Profile = message.Code;
+                AvatarReceived?.Invoke(source.Id, message.Code!, Avatars.ParseColor(message.Text), photo);
+                break;
+            }
+            case "receipt" when Receipt.Parse(message.Text) is { } receipt:
+                if (message.To is { } to && to != id)
+                {
+                    // Host relays a receipt to an author it is not addressed to.
+                    if (IsHost && source.Joined && members.TryGetValue(to, out var target) && target.Connected) Send(target, new Message { Type = "receipt", From = source.Id, Text = message.Text });
+                    break;
+                }
+                ReceiptReceived?.Invoke(!IsHost && source == hostLink && message.From is { } reader && roster.ContainsKey(reader) ? reader : source.Id, receipt);
+                break;
             case "caps":
                 source.Modern = (message.Text ?? "").Split(',').Contains("watch");
                 UpdateTargets(); break;
@@ -497,6 +536,8 @@ public sealed class VoiceRoom : IDisposable
         public readonly bool HostConnection = hostConnection;
         public bool Connected, Joined, Modern; public uint ShareStream; public int VoiceVolume = 100, ShareVolume = 100;
         public long LastChat;
+        /// <summary>Profile id announced with the avatar (not verified: used for pictures only).</summary>
+        public string? Profile;
         /// <summary>Our streams this member watches.</summary>
         public readonly HashSet<byte> Watching = [];
         /// <summary>This member's streams that we watch.</summary>
@@ -513,6 +554,7 @@ public sealed class VoiceRoom : IDisposable
         public string? Code { get; set; }
         public string? Text { get; set; }
         public string? ChatId { get; set; }
+        public string? Photo { get; set; }
         public byte VideoKind { get; set; }
         public uint VideoSequence { get; set; } public uint AudioStream { get; set; }
         public int Width { get; set; } public int Height { get; set; } public int Fps { get; set; }

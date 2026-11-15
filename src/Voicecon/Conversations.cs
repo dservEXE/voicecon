@@ -55,6 +55,12 @@ public sealed class GroupBook
 public sealed record ChatRecord(string Id, string Name, string Text, bool Mine, DateTimeOffset Time);
 
 /// <summary>
+/// Where a message is. Yours: sending → sent (one tick) → delivered to their app (two ticks) → read (two coloured ticks),
+/// or failed. Theirs: received (a delivery receipt went back) → seen (a read receipt went back).
+/// </summary>
+public enum MessageState : byte { None = 0, Sending = 1, Sent = 2, Delivered = 3, Read = 4, Failed = 5, Received = 10, Seen = 11 }
+
+/// <summary>
 /// Local, encrypted chat history. One append-only file per conversation; each line is one AES-GCM record
 /// bound to its conversation. The key is protected by Windows DPAPI for the current user.
 /// When the total size passes the limit (300 MB by default) the oldest messages across all conversations are dropped.
@@ -64,10 +70,11 @@ public sealed class ChatStore
     public const long DefaultLimit = 300L * 1024 * 1024;
     private readonly string directory;
     private readonly byte[] key;
-    private readonly long limit;
+    private long limit;
     private long total;
     public long TotalBytes => total;
-    public long Limit => limit;
+    /// <summary>Size cap for all conversations; lowering it trims the oldest messages right away.</summary>
+    public long Limit { get => limit; set { limit = Math.Max(4096, value); if (total > limit) Trim(); } }
 
     public ChatStore(string? directory = null, long limit = DefaultLimit)
     {
@@ -76,6 +83,65 @@ public sealed class ChatStore
         Directory.CreateDirectory(this.directory);
         key = LoadKey();
         total = Files().Sum(f => f.Length);
+        LoadStates();
+    }
+
+    // ---- Message states (ticks), kept beside the history and sealed with the same key ----
+    private sealed record StateEntry(MessageState S, string? F);
+    private Dictionary<string, Dictionary<string, StateEntry>> states = new();
+    private const int StatesPerConversation = 3000;
+    private string StatesPath => Path.Combine(directory, "states.bin");
+    public MessageState State(string conversation, string id) => states.TryGetValue(conversation, out var map) && map.TryGetValue(id, out var entry) ? entry.S : MessageState.None;
+    /// <summary>Who sent an incoming message (a friend id), so a read receipt can find them later.</summary>
+    public string? Sender(string conversation, string id) => states.TryGetValue(conversation, out var map) && map.TryGetValue(id, out var entry) ? entry.F : null;
+    public IEnumerable<string> WithState(string conversation, MessageState state) =>
+        states.TryGetValue(conversation, out var map) ? map.Where(p => p.Value.S == state).Select(p => p.Key).ToList() : [];
+    /// <summary>
+    /// Moves a message forward. Your messages only advance (sent → delivered → read); a failed one can still be
+    /// delivered later. Returns true if anything changed.
+    /// </summary>
+    public bool SetState(string conversation, string id, MessageState state, string? from = null)
+    {
+        if (!states.TryGetValue(conversation, out var map)) states[conversation] = map = new();
+        var current = map.TryGetValue(id, out var entry) ? entry.S : MessageState.None;
+        if (!Allowed(current, state)) return false;
+        map[id] = new StateEntry(state, from ?? entry?.F);
+        if (map.Count > StatesPerConversation) foreach (var old in map.Keys.Take(map.Count - StatesPerConversation + 200).ToList()) map.Remove(old);
+        SaveStates(); return true;
+    }
+    private static bool Allowed(MessageState from, MessageState to) => (from, to) switch
+    {
+        (MessageState.None, _) => true,
+        (MessageState.Sending, MessageState.Sent or MessageState.Delivered or MessageState.Read or MessageState.Failed) => true,
+        (MessageState.Sent, MessageState.Delivered or MessageState.Read or MessageState.Failed) => true,
+        (MessageState.Failed, MessageState.Sending or MessageState.Sent or MessageState.Delivered or MessageState.Read) => true,
+        (MessageState.Delivered, MessageState.Read) => true,
+        (MessageState.Received, MessageState.Seen) => true,
+        _ => false,
+    };
+    private void LoadStates()
+    {
+        try
+        {
+            if (!File.Exists(StatesPath)) return;
+            var data = File.ReadAllBytes(StatesPath); if (data.Length < 29) return;
+            var plain = new byte[data.Length - 28];
+            using var aes = new AesGcm(key, 16);
+            aes.Decrypt(data.AsSpan(0, 12), data.AsSpan(28), data.AsSpan(12, 16), plain, Encoding.ASCII.GetBytes("states"));
+            states = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, StateEntry>>>(plain) ?? new();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CryptographicException or JsonException) { AppLog.Error("Отметки о доставке не загружены", ex); states = new(); }
+    }
+    private void SaveStates()
+    {
+        try
+        {
+            var plain = JsonSerializer.SerializeToUtf8Bytes(states);
+            var output = new byte[28 + plain.Length]; RandomNumberGenerator.Fill(output.AsSpan(0, 12));
+            using (var aes = new AesGcm(key, 16)) aes.Encrypt(output.AsSpan(0, 12), plain, output.AsSpan(28), output.AsSpan(12, 16), Encoding.ASCII.GetBytes("states"));
+            File.WriteAllBytes(StatesPath + ".tmp", output); File.Move(StatesPath + ".tmp", StatesPath, true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AppLog.Error("Отметки о доставке не сохранены", ex); }
     }
 
     private byte[] LoadKey()
@@ -128,6 +194,7 @@ public sealed class ChatStore
     {
         foreach (var file in Files()) try { file.Delete(); } catch (IOException) { }
         total = Files().Sum(f => f.Length);
+        states = new(); SaveStates();
     }
 
     // Line format: "<unix ms>.<base64 nonce|tag|ciphertext>". The timestamp is bound to the record through the AAD,

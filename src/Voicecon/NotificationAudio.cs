@@ -49,10 +49,16 @@ public sealed class NotificationMixer : IWaveProvider
     private readonly Slot cue = new(), ring = new();
     private NotificationClip? nextCue, nextRing;
     private bool changeCue, changeRing;
+    private int nextRingGap = -1;
     public WaveFormat WaveFormat { get; } = new(SampleRate, 16, 2);
     public volatile float MasterGain = 1;
+    /// <summary>All app sounds sit a little above unity so cues and ringing are heard over a game.</summary>
+    public const float Loudness = 1.3f;
     public void SetCue(NotificationClip? clip) { lock (gate) { nextCue = clip; changeCue = true; } }
-    public void SetRing(NotificationClip? clip) { lock (gate) { nextRing = clip; changeRing = true; } }
+    /// <summary>Ringing repeats the whole clip, with <paramref name="gapMs"/> of silence between rounds, until it is replaced or stopped.</summary>
+    public void SetRing(NotificationClip? clip, int gapMs = -1) { lock (gate) { nextRing = clip; nextRingGap = gapMs; changeRing = true; } }
+    /// <summary>True while a ring is playing (or about to start).</summary>
+    public bool Ringing { get { lock (gate) return changeRing ? nextRing is not null : !ring.Idle; } }
     public void Clear() { lock (gate) { cue.Clear(); ring.Clear(); nextCue = nextRing = null; changeCue = changeRing = false; } }
     public int Read(byte[] buffer, int offset, int count)
     {
@@ -61,9 +67,9 @@ public sealed class NotificationMixer : IWaveProvider
         lock (gate)
         {
             if (changeCue) { cue.Replace(nextCue); nextCue = null; changeCue = false; }
-            if (changeRing) { ring.Replace(nextRing); nextRing = null; changeRing = false; }
+            if (changeRing) { ring.Replace(nextRing, nextRingGap); nextRing = null; changeRing = false; }
             var output = MemoryMarshal.Cast<byte, short>(buffer.AsSpan(offset, count));
-            var gain = float.IsFinite(MasterGain) ? Math.Clamp(MasterGain, 0, 3) : 1;
+            var gain = (float.IsFinite(MasterGain) ? Math.Clamp(MasterGain, 0, 3) : 1) * Loudness;
             if (cue.Idle && ring.Idle) { output.Clear(); return count; }
             for (var i = 0; i < output.Length; i += 2)
             {
@@ -76,11 +82,11 @@ public sealed class NotificationMixer : IWaveProvider
     }
     private sealed class Slot
     {
-        private NotificationClip? clip; private int position, tailPosition = TransitionFrames;
+        private NotificationClip? clip; private int position, tailPosition = TransitionFrames, gapFrames = -1, silence;
         private readonly float[] tail = new float[TransitionFrames * 2];
         public bool Idle => clip is null && tailPosition >= TransitionFrames;
-        public void Clear() { clip = null; position = 0; tailPosition = TransitionFrames; Array.Clear(tail); }
-        public void Replace(NotificationClip? next)
+        public void Clear() { clip = null; position = 0; tailPosition = TransitionFrames; gapFrames = -1; silence = 0; Array.Clear(tail); }
+        public void Replace(NotificationClip? next, int gapMs = -1)
         {
             // Render the outgoing waveform into a fixed 10 ms fade, including any earlier fade.
             // This preserves phase continuity even when replacements arrive faster than the fade.
@@ -89,7 +95,8 @@ public sealed class NotificationMixer : IWaveProvider
                 var previous = Next(); var gain = (float)(1 - NotificationClip.Smooth(i / (double)(TransitionFrames - 1)));
                 tail[i * 2] = previous.Left * gain; tail[i * 2 + 1] = previous.Right * gain;
             }
-            clip = next; position = 0; tailPosition = 0;
+            clip = next; position = 0; tailPosition = 0; silence = 0;
+            gapFrames = gapMs < 0 ? -1 : (int)Math.Min(SampleRate * 10L, gapMs * (long)SampleRate / 1000);
         }
         public (float Left, float Right) Next()
         {
@@ -97,7 +104,9 @@ public sealed class NotificationMixer : IWaveProvider
             if (clip is not null)
             {
                 if (position < clip.Frames) { left = clip.Data[position * 2]; right = clip.Data[position * 2 + 1]; position++; }
-                else clip = null;
+                else if (gapFrames < 0) clip = null;
+                // Looping: a pause, then the clip again from the start (each clip already fades in and out).
+                else if (++silence >= gapFrames) { position = 0; silence = 0; }
             }
             if (tailPosition < TransitionFrames) { left += tail[tailPosition * 2]; right += tail[tailPosition * 2 + 1]; tailPosition++; }
             return (left, right);

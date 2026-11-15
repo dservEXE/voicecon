@@ -13,6 +13,9 @@ public sealed class StreamWindow : ThemedDialog
     private bool fullscreen; private Rectangle restoreBounds; private FormWindowState restoreState;
     private long frames, lastFrame; private string waiting = "Подключаем трансляцию… первый кадр появится через секунду";
     public string Key { get; }
+    /// <summary>Opened full screen from the stage: leaving full screen brings the stream back to the main window.</summary>
+    [System.ComponentModel.DefaultValue(false)] public bool ReturnOnLeavingFullscreen { get; set; }
+    public event Action? LeftFullscreen;
     public bool HasImage => picture.Image is not null;
     public bool Paused => WindowState == FormWindowState.Minimized || !Visible;
 
@@ -61,6 +64,7 @@ public sealed class StreamWindow : ThemedDialog
             Bounds = restoreBounds; WindowState = restoreState;
         }
         fullButton.Glyph = fullscreen ? UiIcon.Collapse : UiIcon.Expand; fullButton.Invalidate();
+        if (!fullscreen && ReturnOnLeavingFullscreen) LeftFullscreen?.Invoke();
     }
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {

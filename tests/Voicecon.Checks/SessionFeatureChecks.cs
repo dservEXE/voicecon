@@ -75,6 +75,9 @@ internal static class SessionFeatureChecks
         }
         drawer.Visible = false;
         CheckEconomyVoice();
+        CheckAvatars();
+        CheckChatSelection();
+        CheckStage();
         Console.WriteLine("PASS stream window frames/fullscreen/Esc, 300% sliders, settings drawer, call strip, distinct hang-up vs stop-sharing, draggable segments and switches; no visible windows or capture");
     }
     private static void Prepare(Control c) { _ = c.Handle; c.PerformLayout(); foreach (Control child in c.Controls) Prepare(child); }
@@ -155,6 +158,83 @@ internal static class SessionFeatureChecks
             var pcm = new byte[960 * 2]; for (var i = 0; i < 5; i++) jitter.Read(pcm, 0, pcm.Length);
             Require(jitter.Lost == 1 && jitter.Recovered == 1, "A lost 60 ms packet is rebuilt from FEC");
         }
+    }
+    private static void CheckAvatars()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "VoiceconAvatars-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
+        try
+        {
+            const string me = "00112233445566778899aabbccddeeff", friend = "ffeeddccbbaa99887766554433221100", peer = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+            Avatars.Load(me, folder);
+            var big = Path.Combine(folder, "big.jpg"); File.WriteAllBytes(big, new byte[Avatars.MaxPhotoFileBytes + 1]);
+            var refused = false; try { Avatars.LoadPhoto(big).Dispose(); } catch (IOException) { refused = true; }
+            Require(refused, "A photo over the size limit is refused");
+            var junk = Path.Combine(folder, "junk.png"); File.WriteAllText(junk, "not an image"); refused = false; try { Avatars.LoadPhoto(junk).Dispose(); } catch (IOException) { refused = true; }
+            Require(refused, "A file that is not a picture is refused");
+            var wide = Path.Combine(folder, "wide.png");
+            using (var picture = new Bitmap(800, 400)) { using (var g = Graphics.FromImage(picture)) { g.Clear(Color.Red); g.FillRectangle(Brushes.Blue, 200, 0, 400, 400); } picture.Save(wide, System.Drawing.Imaging.ImageFormat.Png); }
+            var photo = Avatars.LoadPhoto(wide);
+            Require(photo.Width == Avatars.PhotoSize && photo.Height == Avatars.PhotoSize && photo.GetPixel(Avatars.PhotoSize / 2, Avatars.PhotoSize / 2).B > 200 && photo.GetPixel(2, 2).B > 200, "A wide photo is cropped to its centre square");
+            var shared = Avatars.Share(photo);
+            Require(shared.Length < Avatars.MaxSharedBytes && Avatars.Decode(shared) is { Width: Avatars.SharedSize }, "The shared photo is small and decodes");
+            Require(Avatars.Decode(System.Text.Encoding.ASCII.GetBytes("GIF89a-not-allowed")) is null && Avatars.Decode([0xFF, 0xD8, 1, 2, 3, 4, 5, 6, 7]) is null, "Only real PNG or JPEG data from peers is decoded");
+            Avatars.SetOwn(Avatars.Palette[3], photo);
+            Avatars.SetFriend(friend, Avatars.Palette[5], null);
+            Avatars.SetSession(peer, Avatars.Palette[1], null);
+            Require(Avatars.Get(peer)?.Color == Avatars.Palette[1], "A group-call avatar shows during the call");
+            Avatars.ClearSession(); Require(Avatars.Get(peer) is null, "Group-call avatars are not kept");
+            Avatars.SetFriend(me, Avatars.Palette[0], null); Require(Avatars.Get(me)?.Color == Avatars.Palette[3], "Nobody can overwrite your own avatar");
+            Avatars.Load(me, folder);
+            Require(Avatars.Get(me) is { Photo: { Width: Avatars.PhotoSize } } own && own.Color == Avatars.Palette[3] && Avatars.Get(friend)?.Color == Avatars.Palette[5], "Own and friends' avatars survive restart");
+            using (var avatar = new Bitmap(60, 60)) using (var g = Graphics.FromImage(avatar)) { g.Clear(Color.Black); Neu.Avatar(g, new RectangleF(5, 5, 50, 50), me, "Я"); Require(avatar.GetPixel(30, 30).B > 150, "The photo is drawn inside the avatar circle"); }
+            Avatars.SetOwn(null, null); Avatars.SetFriend(friend, null, null);
+            Require(Avatars.Get(me) is null && !File.Exists(Path.Combine(folder, me + ".png")), "Removing the photo deletes it");
+        }
+        finally { Avatars.Load("", Path.Combine(folder, "none")); try { Directory.Delete(folder, true); } catch (IOException) { } }
+    }
+    /// <summary>Watched streams sit in the main window: large with the chat on the right, small above the chat, or below on a narrow window.</summary>
+    private static void CheckStage()
+    {
+        using var form = new MainForm(true, "graphite") { Size = new Size(1300, 820) }; _ = form.Handle; Prepare(form); form.PerformLayout();
+        var center = Get<CenterLayout>(form, "center"); var stageCard = Get<SurfacePanel>(form, "stageCard"); var stage = Get<StageView>(form, "stage");
+        var chat = center.Controls.Cast<Control>().First(c => c != stageCard);
+        Require(center.Mode == StageMode.Hidden && !stageCard.Visible && chat.Bounds == center.ClientRectangle, "Without streams the chat fills the middle");
+        Invoke(form, "ShowPreviewStage", false); center.PerformLayout();
+        Require(center.Mode == StageMode.Full && stageCard.Visible && stage.Count == 2 && stageCard.Right <= chat.Left && chat.Width == center.ChatColumnWidth && chat.Height == center.Height && stageCard.Width > chat.Width, "Watching: the stream is large and the chat becomes a column on the right");
+        Invoke(form, "SetStage", StageMode.Mini); center.PerformLayout();
+        Require(stage.Mode == StageMode.Mini && stageCard.Bottom <= chat.Top && stageCard.Width == center.Width && chat.Height > stageCard.Height, "Collapsed: a mini view above the chat");
+        Invoke(form, "SetStage", StageMode.Full); form.Size = form.MinimumSize; form.PerformLayout(); center.PerformLayout();
+        Require(!center.Narrow || stageCard.Bottom <= chat.Top && chat.Height > 100, "On a narrow window the chat goes below the stream");
+        stage.Remove("preview:1"); Require(stage.Focused == "preview:2", "Removing the shown stream shows the next one");
+
+        stage.Remove("preview:2"); Invoke(form, "SetStage", StageMode.Full); center.PerformLayout();
+        Require(center.Mode == StageMode.Hidden && chat.Bounds == center.ClientRectangle, "With nothing left to watch the chat fills the middle again");
+        var added = new Bitmap(32, 18); stage.ShowFrame("missing", added); var disposed = false; try { _ = added.Width; } catch (ArgumentException) { disposed = true; }
+        Require(disposed, "A frame for a stream no longer shown is released");
+    }
+    private static void CheckChatSelection()
+    {
+        using var host = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Location = new Point(-4000, -4000), Size = new Size(520, 400) };
+        var view = new ChatView { Location = Point.Empty, Size = new Size(500, 380) }; host.Controls.Add(view); _ = host.Handle; _ = view.Handle;
+        var states = new Dictionary<string, MessageState> { ["a"] = MessageState.Read, ["b"] = MessageState.Failed };
+        view.StateOf = id => states.GetValueOrDefault(id);
+        view.SetRecords([new ChatRecord("a", "Вы", "Первое сообщение, его можно выделить частично", true, DateTimeOffset.Now.AddMinutes(-2)), new ChatRecord("c", "Алекс", "Ответ", false, DateTimeOffset.Now.AddMinutes(-1)), new ChatRecord("b", "Вы", "Не ушло", true, DateTimeOffset.Now)]);
+        var items = (System.Collections.IList)typeof(ChatView).GetField("items", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
+        var first = items.Cast<object>().First(i => (bool)i.GetType().GetProperty("Day")!.GetValue(i)! == false);
+        var text = (RectangleF)first.GetType().GetProperty("TextBounds")!.GetValue(first)!;
+        var offset = (float)typeof(ChatView).GetProperty("Offset", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
+        var press = new Point((int)(text.X + 6), (int)(text.Y + offset + text.Height / 2));
+        typeof(ChatView).GetMethod("BeginSelect", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, [first, press]);
+        var selector = (TextBox)typeof(ChatView).GetField("selector", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
+        Require(selector.Visible && selector.Text == "Первое сообщение, его можно выделить частично" && selector.ReadOnly && Rectangle.Round(new RectangleF(text.X, text.Y + offset, text.Width, text.Height)) == selector.Bounds, "Pressing a message lays a read-only selection box exactly over its text");
+        selector.Select(7, 9); Require(selector.SelectedText == "сообщение", "Part of a message can be selected");
+        view.SetRecords([]); Require(!selector.Visible, "The selection box goes away when the chat changes");
+        using var frame = new Bitmap(view.Width, view.Height);
+        view.SetRecords([new ChatRecord("a", "Вы", "Прочитано", true, DateTimeOffset.Now)]); view.DrawToBitmap(frame, new Rectangle(Point.Empty, frame.Size));
+        var item = items.Cast<object>().First(i => (bool)i.GetType().GetProperty("Day")!.GetValue(i)! == false);
+        var bubble = (RectangleF)item.GetType().GetProperty("Bounds")!.GetValue(item)!; offset = (float)typeof(ChatView).GetProperty("Offset", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
+        var tickPixels = 0; for (var y = (int)(bubble.Bottom + offset - 22); y < bubble.Bottom + offset - 4; y++) for (var x = (int)(bubble.Right - 30); x < bubble.Right - 4; x++) { var c = frame.GetPixel(x, y); if (c.G > 190 && c.B > 220 && c.R < 170) tickPixels++; }
+        Require(tickPixels > 6, "Read messages show coloured ticks");
     }
     /// <summary>Energy between 4 and 7.5 kHz (what narrowband voice loses), from 512-point DFT frames.</summary>
     private static double HighBand(short[] samples)

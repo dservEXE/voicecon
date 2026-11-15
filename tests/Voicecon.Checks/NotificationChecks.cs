@@ -34,6 +34,16 @@ internal static class NotificationChecks
         var replace = new NotificationMixer(); replace.SetCue(UiSounds.Clip(NotificationCue.HeadphonesOn)); Read(replace, 3900);
         replace.SetCue(UiSounds.Clip(NotificationCue.MicrophoneOff)); var transition = Read(replace, 1200);
         Require(transition.Select(Math.Abs).Max() < 9000, "Crossfade must remain bounded");
+        // Ringing repeats the whole clip after a pause until stopped; a cue plays once.
+        var ringClip = UiSounds.Clip(NotificationCue.Message); var ringing = new NotificationMixer(); ringing.SetRing(ringClip, 100);
+        var rounds = Read(ringing, ringClip.Frames * 3 + 9600);
+        int Loud(int from, int count) => rounds.Skip(from * 2).Take(count * 2).Count(s => Math.Abs(s) > 40);
+        Require(ringing.Ringing && Loud(ringClip.Frames + 4800 + 200, ringClip.Frames - 400) > 0 && Loud(2 * (ringClip.Frames + 4800) + 200, ringClip.Frames - 400) > 0, "Ringing repeats the clip");
+        ringing.SetRing(null); Read(ringing, 2000); Require(!ringing.Ringing && Read(ringing, 4800).All(s => s == 0), "Stopped ringing is silent");
+        var once = new NotificationMixer(); once.SetRing(ringClip); Read(once, ringClip.Frames + 960); Require(!once.Ringing, "A preview ring plays once");
+        var song = typeof(UiSounds).GetMethod("CreateEmbeddedRingtone", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.Invoke(null, ["Voicecon.Ringtone.Boris"]) as NotificationClip;
+        Require(song is not null && song.Frames > 48000 * 25, $"The whole ringtone is decoded, not its first seconds ({(song?.Frames ?? 0) / 48000.0:F1} s)");
+        Require(NotificationMixer.Loudness > 1, "App sounds are a little louder than before");
         Console.WriteLine($"PASS {signatures.Count} distinct watery cues, smooth zero endpoints, silent tails, EOF clears reused buffers, phase-continuous stop, bounded replacement fade");
 
         var outputs = new List<FakeOutput>();

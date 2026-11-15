@@ -8,7 +8,26 @@ public sealed partial class MainForm
     private readonly BackdropPanel settingsDrawer = new();
     private readonly ThemedScrollHost settingsScroller = new() { Dock = DockStyle.Fill };
     private readonly SlimSlider microphoneGain = new();
-    private readonly UiLabel microphoneGainValue = new(), chatUsage = new();
+    private readonly UiLabel microphoneGainValue = new(), chatUsage = new(), chatLimitValue = new();
+    private readonly SlimSlider chatLimit = new();
+    private readonly AvatarPreview avatarPreview = new();
+    private readonly AvatarColorPicker avatarColors = new();
+    private readonly SoftButton choosePhoto = new(), removePhoto = new();
+    /// <summary>Refreshes the avatar controls in Settings from the current choice.</summary>
+    private void UpdateAvatarControls()
+    {
+        var id = contacts?.Id ?? "me"; var own = Avatars.Get(id);
+        avatarPreview.Set(id, settings.Name); avatarColors.Set(id, own?.Color); removePhoto.Enabled = own?.Photo is not null;
+    }
+    private void ChooseAvatarPhoto()
+    {
+        if (contacts is null) { SetHint("Аватарка будет доступна после загрузки профиля."); return; }
+        using var picker = new OpenFileDialog { Filter = "Изображения|*.jpg;*.jpeg;*.png;*.bmp;*.gif", Title = "Фото для аватарки", CheckFileExists = true };
+        if (picker.ShowDialog(this) != DialogResult.OK) return;
+        try { var photo = Avatars.LoadPhoto(picker.FileName); Avatars.SetOwn(Avatars.Get(contacts.Id)?.Color, photo); ShareOwnAvatar(); UpdateAvatarControls(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OutOfMemoryException or System.Runtime.InteropServices.ExternalException) { SetHint("Фото не подошло: " + ex.Message); }
+    }
+    private readonly System.Windows.Forms.Timer chatLimitTimer = new() { Interval = 400 };
     private readonly ThemeSwatches themes = new();
     private readonly SegmentedPicker animationPicker = new();
     private readonly ToggleRow messageSounds = new(), showOnline = new(), showMetrics = new(), backgroundGlow = new();
@@ -37,6 +56,14 @@ public sealed partial class MainForm
         var profile = SettingsCard("Профиль", UiIcon.Person);
         AddRow(profile, TextLabel("Имя для друзей", 9, TextTone.Muted), 24); name.MaxLength = 24; name.Text = settings.Name; AddRow(profile, InputSurface(name, false), 42);
         AddRow(profile, Space(), 8); PrepareButton(copyCode, "Скопировать мой код друга", UiIcon.Copy); AddRow(profile, copyCode, 48);
+        AddRow(profile, Space(), 10); AddRow(profile, TextLabel("Аватарка", 9, TextTone.Muted), 24);
+        var avatarRow = Columns(104, 14, -1); avatarPreview.Dock = DockStyle.Fill; avatarPreview.Margin = Padding.Empty; avatarRow.Controls.Add(avatarPreview, 0, 0);
+        var avatarButtons = Grid(1); avatarButtons.Dock = DockStyle.Fill;
+        PrepareButton(choosePhoto, "Выбрать фото", UiIcon.Folder, ButtonTone.Secondary); AddRow(avatarButtons, choosePhoto, 48);
+        AddRow(avatarButtons, Space(), 6); PrepareButton(removePhoto, "Убрать фото", UiIcon.Trash, ButtonTone.Quiet); AddRow(avatarButtons, removePhoto, 44);
+        avatarRow.Controls.Add(avatarButtons, 2, 0); AddRow(profile, avatarRow, 104);
+        AddRow(profile, Space(), 4); avatarColors.Dock = DockStyle.Fill; avatarColors.Margin = Padding.Empty; AddRow(profile, avatarColors, 48);
+        AddRow(profile, TextLabel($"Фото: JPG, PNG, BMP или GIF до {Avatars.MaxPhotoFileBytes / 1024 / 1024} МБ, обрезается по центру до квадрата. Друзья увидят аватарку при следующем звонке с вами.", 8.5f, TextTone.Muted), 36);
         FinishCard(page, profile);
 
         var sound = SettingsCard("Звук", UiIcon.Headphones);
@@ -63,9 +90,19 @@ public sealed partial class MainForm
         var ringButtons = Columns(-50, 8, -50);
         var choose = new SoftButton { Text = "Свой файл", Glyph = UiIcon.Folder, Tone = ButtonTone.Secondary, Dock = DockStyle.Fill }; var preview = new SoftButton { Text = "Прослушать", Glyph = UiIcon.Volume, Tone = ButtonTone.Secondary, Dock = DockStyle.Fill };
         choose.Click += (_, _) => { using var picker = new OpenFileDialog { Filter = "Звук WAV или MP3|*.wav;*.mp3", Title = "Мелодия входящего звонка", CheckFileExists = true }; if (picker.ShowDialog(this) == DialogResult.OK) { settings.RingtoneFile = picker.FileName; settings.Ringtone = "custom"; ringtones.SelectedIndex = 4; SaveSettings(); } };
-        preview.Click += (_, _) => sounds.PlayRing(settings.Ringtone, settings.RingtoneFile, OutputDevice);
+        preview.Click += (_, _) => { if (sounds.Ringing && incomingCall is null) sounds.StopRing(); else sounds.PlayRing(settings.Ringtone, settings.RingtoneFile, OutputDevice, loop: false); };
         ringButtons.Controls.Add(choose, 0, 0); ringButtons.Controls.Add(preview, 2, 0); AddRow(alerts, ringButtons, 48);
         FinishCard(page, alerts);
+
+        var chat = SettingsCard("Чат", UiIcon.Chat);
+        var limitRow = Columns(-1, 90); limitRow.Controls.Add(TextLabel("Размер истории на этом ПК", 9, TextTone.Muted), 0, 0);
+        PrepareLabel(chatLimitValue, TextTone.Accent); chatLimitValue.TextAlign = ContentAlignment.MiddleRight; chatLimitValue.Text = $"{settings.ChatLimitMb} МБ"; limitRow.Controls.Add(chatLimitValue, 1, 0);
+        AddRow(chat, limitRow, 28);
+        chatLimit.Minimum = Settings.ChatLimitMin; chatLimit.Maximum = Settings.ChatLimitMax; chatLimit.Step = 50; chatLimit.Value = settings.ChatLimitMb; chatLimit.AccessibleName = "Размер истории чата";
+        AddRow(chat, chatLimit, 36);
+        PrepareLabel(chatUsage, TextTone.Muted); chatUsage.Font = UiTheme.Small; AddRow(chat, chatUsage, 22);
+        PrepareButton(clearHistory, "Очистить историю чатов", UiIcon.Trash, ButtonTone.Quiet); AddRow(chat, clearHistory, 44);
+        FinishCard(page, chat);
 
         var look = SettingsCard("Оформление", UiIcon.Palette);
         AddRow(look, TextLabel("Тема", 9, TextTone.Muted), 24); themes.Selected = UiTheme.Current.Id; themes.AccessibleName = "Тема оформления"; AddRow(look, themes, 58);
@@ -98,8 +135,6 @@ public sealed partial class MainForm
         SetupToggle(showMetrics, "Показывать нагрузку и трафик", "CPU, память и кбит/с внизу окна", settings.ShowMetrics); AddRow(devPanel, showMetrics, 52);
         PrepareButton(network, "Сеть: STUN, TURN и доставка", UiIcon.Sliders); AddRow(devPanel, network, 48); AddRow(devPanel, Space(), 4);
         PrepareButton(manualCodes, "Подключение по разовому коду", UiIcon.Copy); AddRow(devPanel, manualCodes, 48); AddRow(devPanel, Space(), 10);
-        PrepareLabel(chatUsage, TextTone.Muted); chatUsage.Font = UiTheme.Small; AddRow(devPanel, chatUsage, 22);
-        PrepareButton(clearHistory, "Очистить историю чатов", UiIcon.Trash, ButtonTone.Quiet); AddRow(devPanel, clearHistory, 44);
         PrepareButton(openLogs, "Открыть папку журнала", UiIcon.Folder, ButtonTone.Quiet); AddRow(devPanel, openLogs, 44);
         PrepareButton(aboutButton, "О приложении и лицензии", UiIcon.Info, ButtonTone.Quiet); AddRow(devPanel, aboutButton, 44);
         var devIndex = dev.RowCount; AddRow(dev, devPanel, 0); devRow = dev.RowStyles[devIndex]; devPanel.Visible = false;
@@ -159,6 +194,23 @@ public sealed partial class MainForm
         foreach (var check in new[] { ptt, noise, gate }) check.CheckedChanged += (_, _) => { UpdateAudioOptions(); SaveSettings(); };
         talkKey.SelectedIndexChanged += (_, _) => { UpdateAudioOptions(); SaveSettings(); };
         volume.ValueChanged += (_, _) => { UpdateAudioOptions(); SaveSettings(); };
+        choosePhoto.Click += (_, _) => ChooseAvatarPhoto();
+        removePhoto.Click += (_, _) => { if (contacts is null) return; Avatars.SetOwn(Avatars.Get(contacts.Id)?.Color, null); ShareOwnAvatar(); UpdateAvatarControls(); };
+        avatarColors.ColorChosen += color => { if (contacts is null) return; Avatars.SetOwn(color, Avatars.Get(contacts.Id)?.Photo); ShareOwnAvatar(); UpdateAvatarControls(); };
+        chatLimit.ValueChanged += (_, _) =>
+        {
+            // Applied when the slider settles, so dragging past a smaller size does not trim history on the way.
+            var value = Math.Clamp(chatLimit.Value / 50 * 50, Settings.ChatLimitMin, Settings.ChatLimitMax); chatLimitValue.Text = $"{value} МБ";
+            chatLimitTimer.Stop(); chatLimitTimer.Start();
+        };
+        chatLimitTimer.Tick += (_, _) =>
+        {
+            chatLimitTimer.Stop(); if (chatLimit.Capture) { chatLimitTimer.Start(); return; }
+            var value = Math.Clamp(chatLimit.Value / 50 * 50, Settings.ChatLimitMin, Settings.ChatLimitMax); if (value == settings.ChatLimitMb) return;
+            var smaller = value < settings.ChatLimitMb; settings.ChatLimitMb = value; SaveSettings(); UpdateChatLimitLabel();
+            if (chats is not null) { try { chats.Limit = value * 1024L * 1024; } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AppLog.Error("Не удалось сократить историю", ex); } if (smaller) LoadHistory(); }
+            UpdateChatUsage();
+        };
         microphoneGain.ValueChanged += (_, _) => { microphoneGainValue.Text = $"{microphoneGain.Value}%"; settings.MicrophoneGain = microphoneGain.Value; room?.ApplyAudioSettings(); SaveSettings(); };
         name.Leave += (_, _) => { SaveSettings(); if (contacts is not null) presence?.UpdateOwn(contacts.OwnCard(settings.Name, settings.SignalingServer)); };
         microphones.SelectedIndexChanged += (_, _) => SaveSettings(); speakers.SelectedIndexChanged += (_, _) => SaveSettings();
@@ -172,7 +224,7 @@ public sealed partial class MainForm
         notifications.CheckedChanged += (_, _) => { settings.NotificationSounds = notifications.Checked; if (!notifications.Checked) sounds.StopCue(); UpdateCallFeedback(); SaveSettings(); };
         messageSounds.CheckedChanged += (_, _) => { settings.MessageSounds = messageSounds.Checked; SaveSettings(); };
         backgroundGlow.CheckedChanged += (_, _) => { settings.BackgroundGlow = Backdrop.Glow = backgroundGlow.Checked; SaveSettings(); Invalidate(true); UpdateDrift(); };
-        ringtones.SelectedIndexChanged += (_, _) => { settings.Ringtone = (ringtones.SelectedItem as Choice)?.Id ?? "boris"; SaveSettings(); };
+        ringtones.SelectedIndexChanged += (_, _) => { settings.Ringtone = (ringtones.SelectedItem as Choice)?.Id ?? "boris"; UiSounds.WarmRingtones(settings.Ringtone); SaveSettings(); };
         themes.ThemeChosen += id => { if (!applyingTheme) SwitchTheme(id); };
         animationPicker.SelectedIndexChanged += (_, _) =>
         {
@@ -202,7 +254,7 @@ public sealed partial class MainForm
         UiMotion.Run(devRow, this, 260, p => { var h = start + (target - start) * p; devCardRow.Height = cardStart + h - start; devRow.Height = h; settingsScroller.UpdateRange(); },
             () => { devPanel.Visible = devExpanded; settingsScroller.UpdateRange(); if (devExpanded && devAnchor is not null) settingsScroller.ScrollTo(devAnchor); });
     }
-    private void UpdateChatUsage() => chatUsage.Text = chats is null ? "История чатов недоступна" : $"История чатов: {chats.TotalBytes / 1048576.0:0.0} МБ из {chats.Limit / 1048576} МБ · старые сообщения удаляются автоматически";
+    private void UpdateChatUsage() => chatUsage.Text = chats is null ? "История чатов недоступна" : $"Занято {chats.TotalBytes / 1048576.0:0.0} МБ из {chats.Limit / 1048576} МБ · при заполнении удаляются самые старые сообщения";
 
     private void ToggleSettings() { if (settingsOpen) CloseSettings(); else OpenSettings(); }
     /// <summary>

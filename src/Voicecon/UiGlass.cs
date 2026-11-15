@@ -210,10 +210,22 @@ public static class Neu
     /// <summary>Avatar: a slightly raised coloured disc with initials or the group glyph.</summary>
     public static void Avatar(Graphics g, RectangleF r, string id, string name, bool group = false, float depth = SmallDepth)
     {
-        var color = UiTheme.AvatarColor(id);
+        // A chosen colour or photo wins; otherwise the colour follows the id, so a person looks the same everywhere.
+        var chosen = group ? null : Avatars.Get(id);
+        var color = chosen?.Color ?? UiTheme.AvatarColor(id);
         Raised(g, r, r.Width / 2, 1, depth, color, convex: 0.9f, rim: 0.8f);
         var ink = Color.FromArgb(245, 255, 255, 255);
-        if (group) UiIcons.Draw(g, UiIcon.Group, RectangleF.Inflate(r, -r.Width * 0.25f, -r.Height * 0.25f), ink);
+        if (chosen?.Photo is { } photo)
+        {
+            var state = g.Save();
+            var inner = RectangleF.Inflate(r, -Math.Max(1, r.Width * 0.035f), -Math.Max(1, r.Width * 0.035f));
+            using (var circle = new GraphicsPath()) { circle.AddEllipse(inner); g.SetClip(circle, CombineMode.Intersect); }
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.DrawImage(photo, inner);
+            g.Restore(state);
+            using var lip = new Pen(Color.FromArgb(70, 255, 255, 255), Math.Max(1, r.Width * 0.025f)); g.DrawArc(lip, inner, 200, 110);
+        }
+        else if (group) UiIcons.Draw(g, UiIcon.Group, RectangleF.Inflate(r, -r.Width * 0.25f, -r.Height * 0.25f), ink);
         else
         {
             using var font = new Font("Segoe UI Semibold", Math.Max(6, r.Height * 0.38f), GraphicsUnit.Pixel);

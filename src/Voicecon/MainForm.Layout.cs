@@ -12,6 +12,8 @@ public sealed partial class MainForm
     private readonly SurfacePanel incomingPanel = new();
     private readonly UiLabel incomingTitle = new(), hint = new(), metrics = new(), volumeValue = new();
     private readonly TextBox name = new(), chatInput = new();
+    private readonly UiLabel chatLimitLabel = new();
+    private void UpdateChatLimitLabel() => chatLimitLabel.Text = $"Лимит истории: {settings.ChatLimitMb} МБ";
     private readonly ChatView chatView = new();
     private readonly ThemedScrollHost chatHost = new();
     private readonly SoftButton callButton = new(), endButton = new(), shareButton = new(), inviteButton = new(), mute = new(), deafen = new(), addFriend = new(), ownCard = new(),
@@ -27,6 +29,7 @@ public sealed partial class MainForm
     private TableLayoutPanel? headerGrid;
     private bool applyingTheme;
     private IReadOnlyList<ChatRecord> previewChat = [];
+    private static MessageState PreviewState(string id) => id switch { "2" => MessageState.Read, "4" => MessageState.Delivered, _ => MessageState.None };
     private readonly List<CallStrip.Chip> previewChips = [];
 
     private void BuildLayout()
@@ -91,7 +94,10 @@ public sealed partial class MainForm
         var stripHost = new BackdropPanel { Dock = DockStyle.Fill, Padding = new Padding(6, 0, 6, 0) }; stripHost.Controls.Add(callStrip);
         AddRow(grid, stripHost, 0); stripRow = grid.RowStyles[^1];
 
-        AddRow(grid, BuildChatCard(), 0); grid.RowStyles[^1].SizeType = SizeType.Percent; grid.RowStyles[^1].Height = 100;
+        // The middle: the chat, with watched streams on a stage (large with the chat beside it, or small above it).
+        stageCard = new SurfacePanel { Padding = new Padding(10) }; stage.Dock = DockStyle.Fill; stage.Margin = Padding.Empty; stageCard.Controls.Add(stage);
+        center = new CenterLayout(stageCard, BuildChatCard()) { Dock = DockStyle.Fill };
+        AddRow(grid, center, 0); grid.RowStyles[^1].SizeType = SizeType.Percent; grid.RowStyles[^1].Height = 100;
         AddRow(grid, BuildBottomBar(), 90);
         return grid;
     }
@@ -132,7 +138,7 @@ public sealed partial class MainForm
     {
         var card = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(14, 10, 14, 10) }; var grid = Grid(1); card.Controls.Add(grid);
         var top = Columns(-1, 170);
-        var titles = Grid(1); AddRow(titles, TextLabel("Чат", 12, TextTone.Normal, true), 24); AddRow(titles, TextLabel("Пишите в любое время · история хранится только на ваших ПК, до 300 МБ", 8.5f, TextTone.Muted), 18);
+        var titles = Grid(1); AddRow(titles, TextLabel("Чат", 12, TextTone.Normal, true), 24); PrepareLabel(chatLimitLabel, TextTone.Muted); chatLimitLabel.Font = UiTheme.Small; UpdateChatLimitLabel(); AddRow(titles, chatLimitLabel, 18);
         top.Controls.Add(titles, 0, 0);
         PrepareButton(olderMessages, "Показать раньше", UiIcon.Chevron, ButtonTone.Quiet); olderMessages.Font = UiTheme.Small; olderMessages.Visible = false; top.Controls.Add(olderMessages, 1, 0);
         AddRow(grid, top, 46); AddRow(grid, Space(), 6);
@@ -263,7 +269,7 @@ public sealed partial class MainForm
         {
             ApplyTitleBar(); LoadHistory();
             var old = ownedIcon; ownedIcon = BrandIcon.Create(); Icon = ownedIcon; if (tray is not null) { tray.Icon = ownedIcon; if (tray.ContextMenuStrip is { } menu) { menu.BackColor = ThemeMenuRenderer.MenuBack; menu.ForeColor = t.Text; foreach (ToolStripItem item in menu.Items) item.ForeColor = t.Text; } } old?.Dispose();
-            foreach (var view in streamWindows.Values) { var window = view.Window; WindowTheme.Apply(window); Backdrop.Invalidate(window); UiPainting.ApplyBackgrounds(window); window.Invalidate(true); }
+            foreach (var view in streamWindows.Values) { if (view.Window is not { IsDisposed: false } window) continue; WindowTheme.Apply(window); Backdrop.Invalidate(window); UiPainting.ApplyBackgrounds(window); window.Invalidate(true); }
         }
         Invalidate(true); applyingTheme = false;
     }

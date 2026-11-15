@@ -12,12 +12,19 @@ public sealed partial class MainForm
     private readonly ConcurrentDictionary<string, uint> stoppedSequences = new();
     private bool cameraStarting, screenStarting;
 
-    /// <summary>Thread-safe view state for one open stream window (frames arrive on network threads).</summary>
-    private sealed class StreamView(StreamWindow window, string peer, byte kind)
+    /// <summary>
+    /// One stream being watched (frames arrive on network threads). It shows on the stage in the main window, or in its
+    /// own window when popped out (<see cref="Window"/> is then set).
+    /// </summary>
+    private sealed class StreamView(string peer, byte kind, string key, string title)
     {
-        public StreamWindow Window { get; } = window; public string Peer { get; } = peer; public byte Kind { get; } = kind;
+        public string Peer { get; } = peer; public byte Kind { get; } = kind; public string Key { get; } = key; public string Title { get; } = title;
+        public volatile StreamWindow? Window;
         public volatile bool Paused; public int Posting; public Bitmap? Pending; public readonly object Gate = new();
     }
+    private readonly StageView stage = new();
+    private SurfacePanel? stageCard;
+    private CenterLayout? center;
 
     private void WireVideo()
     {
@@ -32,6 +39,12 @@ public sealed partial class MainForm
             RefreshControls();
         });
         capture.Error += error => Dispatch(() => { SetHint(error); RefreshControls(); });
+        stage.CollapseRequested += () => SetStage(StageMode.Mini);
+        stage.ExpandRequested += () => SetStage(StageMode.Full);
+        stage.PopOutRequested += key => PopOut(key, fullscreen: false);
+        stage.FullscreenRequested += key => PopOut(key, fullscreen: true);
+        stage.StopRequested += key => StopWatching(key);
+        Resize += (_, _) => UpdateStagePause(); VisibleChanged += (_, _) => UpdateStagePause();
     }
 
     private void ShowShareMenu()
@@ -101,25 +114,66 @@ public sealed partial class MainForm
     private void StopOwnVideo() { StopScreen(); _ = StopCameraAsync(); }
 
     // ---------------- Watching ----------------
+    /// <summary>Starts watching a stream on the stage, or brings it forward if it is already being watched.</summary>
     private void ToggleWatch(string peer, string name, byte kind)
     {
         var key = peer + ":" + kind;
-        if (streamWindows.TryGetValue(key, out var open)) { if (open.Window.WindowState == FormWindowState.Minimized) open.Window.WindowState = FormWindowState.Normal; open.Window.Activate(); return; }
-        if (room is not { IsDisposed: false } current) return;
-        var window = new StreamWindow(key, name + (kind == 1 ? " · экран" : " · камера")) { Icon = Icon };
-        var view = new StreamView(window, peer, kind);
-        streamWindows[key] = view; stoppedSequences.TryRemove(key, out _);
-        window.Resize += (_, _) => view.Paused = window.WindowState == FormWindowState.Minimized;
-        window.FormClosed += (_, _) =>
+        if (streamWindows.TryGetValue(key, out var open))
         {
-            if (streamWindows.TryRemove(key, out _)) { room?.Watch(peer, kind, false); }
-            if (decoders.TryRemove(key, out var decoder)) decoder.Dispose();
-            lock (view.Gate) { view.Pending?.Dispose(); view.Pending = null; }
-            window.Dispose(); RefreshControls();
-        };
+            if (open.Window is { IsDisposed: false } window) { if (window.WindowState == FormWindowState.Minimized) window.WindowState = FormWindowState.Normal; window.Activate(); }
+            else { stage.FocusOn(key); SetStage(StageMode.Full); }
+            return;
+        }
+        if (room is not { IsDisposed: false } current) return;
+        var title = name + (kind == 1 ? " · экран" : " · камера");
+        var view = new StreamView(peer, kind, key, title);
+        streamWindows[key] = view; stoppedSequences.TryRemove(key, out _);
+        stage.Add(key, title); SetStage(StageMode.Full);
         current.Watch(peer, kind, true);
-        if (!previewMode) window.Show();
         RefreshControls();
+    }
+    /// <summary>Shows the stage large (chat beside it), small above the chat, or not at all.</summary>
+    private void SetStage(StageMode mode)
+    {
+        if (stage.Count == 0) mode = StageMode.Hidden;
+        if (mode != StageMode.Hidden) stage.Mode = mode;
+        if (center is not null) center.Mode = mode;
+        UpdateStagePause();
+    }
+    /// <summary>Streams on the stage are not decoded while the main window is hidden or minimised.</summary>
+    private void UpdateStagePause()
+    {
+        var hidden = !Visible || WindowState == FormWindowState.Minimized;
+        foreach (var view in streamWindows.Values) if (view.Window is null) view.Paused = hidden;
+    }
+    /// <summary>Stops watching: the sender stops sending to us.</summary>
+    private void StopWatching(string key, bool closeWindow = true)
+    {
+        if (!streamWindows.TryRemove(key, out var view)) return;
+        room?.Watch(view.Peer, view.Kind, false);
+        if (decoders.TryRemove(key, out var decoder)) decoder.Dispose();
+        lock (view.Gate) { view.Pending?.Dispose(); view.Pending = null; }
+        var window = view.Window; view.Window = null;
+        if (closeWindow && window is { IsDisposed: false }) window.Close();
+        stage.Remove(key); if (stage.Count == 0) SetStage(StageMode.Hidden);
+        if (!IsDisposed) RefreshControls();
+    }
+    /// <summary>Moves a stream from the stage into its own window (full screen if asked: Esc then brings it back).</summary>
+    private void PopOut(string key, bool fullscreen)
+    {
+        if (!streamWindows.TryGetValue(key, out var view) || view.Window is not null) return;
+        var window = new StreamWindow(key, view.Title) { Icon = Icon, ReturnOnLeavingFullscreen = fullscreen };
+        view.Window = window; view.Paused = false;
+        stage.Remove(key); if (stage.Count == 0) SetStage(StageMode.Hidden);
+        window.Resize += (_, _) => { if (view.Window == window) view.Paused = window.WindowState == FormWindowState.Minimized; };
+        window.LeftFullscreen += () => BeginInvoke(new Action(() => ReturnToStage(view, window)));
+        window.FormClosed += (_, _) => { if (view.Window == window) StopWatching(key, closeWindow: false); window.Dispose(); };
+        if (!previewMode) { window.Show(); if (fullscreen) window.ToggleFullscreen(); }
+    }
+    private void ReturnToStage(StreamView view, StreamWindow window)
+    {
+        if (view.Window != window || !streamWindows.ContainsKey(view.Key)) return;
+        view.Window = null; stage.Add(view.Key, view.Title); SetStage(StageMode.Full); window.Close();
     }
 
     private void ReceiveVideo(string id, string name, byte[] packet)
@@ -154,7 +208,7 @@ public sealed partial class MainForm
     {
         lock (view.Gate) { view.Pending?.Dispose(); view.Pending = bitmap; }
         if (Interlocked.Exchange(ref view.Posting, 1) == 1) return;
-        if (view.Window.IsDisposed || !IsHandleCreated) { Interlocked.Exchange(ref view.Posting, 0); return; }
+        if (view.Window is { IsDisposed: true } || IsDisposed || !IsHandleCreated) { Interlocked.Exchange(ref view.Posting, 0); return; }
         try
         {
             BeginInvoke(new Action(() =>
@@ -162,8 +216,9 @@ public sealed partial class MainForm
                 Interlocked.Exchange(ref view.Posting, 0);
                 Bitmap? image; lock (view.Gate) { image = view.Pending; view.Pending = null; }
                 if (image is null) return;
-                if (view.Window.IsDisposed) { image.Dispose(); return; }
-                view.Window.ShowFrame(image);
+                if (view.Window is { } window) { if (window.IsDisposed) image.Dispose(); else window.ShowFrame(image); }
+                else if (streamWindows.TryGetValue(view.Key, out var current) && current == view) stage.ShowFrame(view.Key, image);
+                else image.Dispose();
             }));
         }
         catch (InvalidOperationException) { Interlocked.Exchange(ref view.Posting, 0); }
@@ -172,24 +227,41 @@ public sealed partial class MainForm
     private void StopRemoteVideo(string id, byte kind, uint sequence)
     {
         var key = id + ":" + kind; stoppedSequences[key] = sequence;
-        if (streamWindows.TryGetValue(key, out var view)) { view.Window.Close(); SetHint(view.Window.Text + " — трансляция завершена."); }
+        if (streamWindows.TryGetValue(key, out var view)) { SetHint(view.Title + " — трансляция завершена."); StopWatching(key); }
     }
     private void CloseEndedStreams()
     {
         var live = room?.RemoteStreams.Select(s => s.PeerId + ":" + s.Kind).ToHashSet() ?? [];
-        foreach (var view in streamWindows.Values.Where(v => !live.Contains(v.Window.Key)).ToArray()) view.Window.Close();
+        foreach (var key in streamWindows.Keys.Where(k => !live.Contains(k)).ToArray()) StopWatching(key);
     }
     private void RemoveVideoParticipant(string id)
     {
-        foreach (var view in streamWindows.Values.Where(v => v.Peer == id).ToArray()) view.Window.Close();
+        foreach (var view in streamWindows.Values.Where(v => v.Peer == id).ToArray()) StopWatching(view.Key);
     }
     private void StopAllVideo()
     {
         StopShareSound(); capture.StopScreen(); _ = capture.StopCameraAsync();
-        foreach (var view in streamWindows.Values.ToArray()) { if (!view.Window.IsDisposed) view.Window.Close(); }
-        streamWindows.Clear();
+        foreach (var key in streamWindows.Keys.ToArray()) StopWatching(key);
+        streamWindows.Clear(); stage.Clear(); SetStage(StageMode.Hidden);
         foreach (var pair in decoders) if (decoders.TryRemove(pair.Key, out var decoder)) decoder.Dispose();
         stoppedSequences.Clear();
+    }
+    /// <summary>Render-only: a stream on the stage (and optionally the mini view) without a call.</summary>
+    internal void ShowPreviewStage(bool mini)
+    {
+        stage.Clear();
+        var frame = new Bitmap(1280, 720);
+        using (var g = Graphics.FromImage(frame))
+        {
+            g.Clear(Color.FromArgb(26, 32, 48)); g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using (var panel = new SolidBrush(Color.FromArgb(44, 54, 82))) g.FillRectangle(panel, 60, 60, 1160, 600);
+            using (var accent = new SolidBrush(Color.FromArgb(124, 92, 236))) g.FillRectangle(accent, 120, 120, 520, 280);
+            using var font = new Font("Segoe UI Semibold", 40); g.DrawString("Сборка · рейд в 21:00", font, Brushes.White, 120, 440);
+        }
+        stage.Add("preview:1", "Алекс · экран"); stage.ShowFrame("preview:1", frame);
+        var camera = new Bitmap(640, 360); using (var g = Graphics.FromImage(camera)) g.Clear(Color.FromArgb(70, 60, 90));
+        stage.Add("preview:2", "Мира · камера"); stage.ShowFrame("preview:2", camera); stage.FocusOn("preview:1");
+        SetStage(mini ? StageMode.Mini : StageMode.Full);
     }
     private void UpdateVideoState()
     {

@@ -8,7 +8,8 @@ public sealed class CallAudioFeedback(UiSounds sounds)
         var joined = connected > connections; connections = connected;
         if (joined) { completedAttempt = calling; StopDial(); if (enabled) sounds.PlayConnected(device); }
         if (!enabled || calling is null || calling == completedAttempt) { StopDial(); return; }
-        if (dialAttempt != calling || now - lastTone >= 3200)
+        // The ringback loops by itself; it is only restarted if something else took the ring slot.
+        if (dialAttempt != calling || now - lastTone >= 3200 && !sounds.Ringing)
         { dialAttempt = calling; lastTone = now; sounds.PlayDial(device); }
     }
     private void StopDial() { if (dialAttempt is null) return; sounds.StopRing(); dialAttempt = null; }

@@ -141,14 +141,15 @@ public sealed class ContactBook : IDisposable
                 aes.Decrypt(Convert.FromBase64String(envelope.N), cipher, Convert.FromBase64String(envelope.T), plain, Encoding.ASCII.GetBytes(friend.Id + Id));
                 var signal = JsonSerializer.Deserialize<CallSignal>(plain);
                 var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                if (signal is null || !Guid.TryParse(signal.Id, out _) || signal.Kind is not ("offer" or "answer" or "reject" or "cancel" or "busy" or "msg")) return null;
-                // Call signals are live (±90 s); chat messages may have waited for us on the delivery service.
-                if (signal.Kind == "msg" ? signal.Time < now - MessageLifetimeSeconds || signal.Time > now + 300 : signal.Time < now - 90 || signal.Time > now + 90) return null;
+                if (signal is null || !Guid.TryParse(signal.Id, out _) || signal.Kind is not ("offer" or "answer" or "reject" or "cancel" or "busy" or "msg" or "rcpt")) return null;
+                // Call signals are live (±90 s); chat messages and their receipts may have waited for us on the delivery service.
+                if (signal.Kind is "msg" or "rcpt" ? signal.Time < now - MessageLifetimeSeconds || signal.Time > now + 300 : signal.Time < now - 90 || signal.Time > now + 90) return null;
                 if (signal.Kind == "msg")
                 {
                     if (signal.Code is not { Length: > 0 } text) return null;
                     signal = signal with { Code = new string(text.Where(c => c == '\n' || !char.IsControl(c)).Take(OfflineMessageLimit).ToArray()) };
                 }
+                if (signal.Kind == "rcpt" && Receipt.Parse(signal.Code) is null) return null;
                 if (signal.Group is not null && !Guid.TryParseExact(signal.Group, "N", out _)) signal = signal with { Group = null, Title = null };
                 if (signal.Title is { } title) signal = signal with { Title = new string(title.Where(c => !char.IsControl(c)).Take(40).ToArray()) };
                 return (friend, signal);
@@ -177,6 +178,20 @@ public sealed class ContactBook : IDisposable
 
 /// <param name="Group">Optional group conversation id for a group call; older clients ignore it.</param>
 /// <param name="Title">Optional group title shown to the callee.</param>
+/// <summary>A delivery or read receipt: "d:" or "r:" followed by up to 40 comma-separated message ids.</summary>
+public sealed record Receipt(bool Read, IReadOnlyList<string> Ids)
+{
+    public const int MaxIds = 40;
+    public string Encode() => (Read ? "r:" : "d:") + string.Join(',', Ids);
+    public static Receipt? Parse(string? code)
+    {
+        if (code is null || code.Length < 3 || code.Length > 2 + MaxIds * 33 || code[1] != ':' || code[0] is not ('d' or 'r')) return null;
+        var ids = code[2..].Split(',');
+        if (ids.Length is 0 or > MaxIds || ids.Any(id => !Guid.TryParseExact(id, "N", out _))) return null;
+        return new Receipt(code[0] == 'r', ids);
+    }
+}
+
 public sealed record CallSignal(string Kind, string Id, long Time, string? Code = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Group = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Title = null)

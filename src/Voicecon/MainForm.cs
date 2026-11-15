@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Diagnostics;
 using Microsoft.Win32;
 using NAudio.Wave;
@@ -49,12 +50,15 @@ public sealed partial class MainForm : Form
     public MainForm(bool previewMode = false, string? previewTheme = null, bool startInTray = false)
     {
         if (previewMode) settings.Name = "Игрок";
-        UiSounds.WarmRingtones();
+        UiSounds.WarmRingtones(settings.Ringtone);
+        Avatars.Changed += () => { if (IsHandleCreated && InvokeRequired) BeginInvoke(new Action(OnAvatarsChanged)); else OnAvatarsChanged(); };
         this.previewMode = previewMode; this.startInTray = startInTray; windowRequested = !startInTray;
         if (!previewMode) settings.StartWithWindows = StartupManager.IsEnabled();
         UiTheme.Select(previewTheme ?? settings.Theme); UiMotion.Level = previewMode ? MotionLevel.Off : UiMotion.Parse(settings.AnimationLevel);
         Backdrop.Glow = previewMode || settings.BackgroundGlow; Backdrop.Phase = previewMode ? 30 : DateTime.Now.TimeOfDay.TotalSeconds;
         BuildLayout(); ApplyTheme();
+        chatView.StateOf = id => selected is null ? MessageState.None : previewMode ? PreviewState(id) : chats?.State(selected.Key, id) ?? MessageState.None;
+        chatView.ResendRequested += Resend;
         if (previewMode)
         {
             microphones.Items.Add(new Device(-1, "По умолчанию в Windows")); speakers.Items.Add(new Device(-1, "По умолчанию в Windows"));
@@ -65,7 +69,8 @@ public sealed partial class MainForm : Form
         settingsTimer.Tick += (_, _) => { settingsTimer.Stop(); PersistSettings(); };
         contactsTimer.Tick += (_, _) => { contactsTimer.Stop(); RefreshContacts(); RefreshControls(); };
         Deactivate += (_, _) => { UiMotion.FinishAll(); driftTimer.Stop(); };
-        Activated += (_, _) => UpdateDrift();
+        Activated += (_, _) => { UpdateDrift(); MarkConversationRead(); };
+        receiptTimer.Tick += async (_, _) => await FlushReceipts();
         driftTimer.Tick += (_, _) =>
         {
             if (!CanDrift) { driftTimer.Stop(); return; }
@@ -136,7 +141,7 @@ public sealed partial class MainForm : Form
         // Friends see this name in calls; nudge once per start while it is still the neutral default.
         if (settings.Name == Settings.DefaultName) notice = Join(notice, "Друзья видят вас как «Игрок». Укажите своё имя: Настройки → Профиль.");
         try { groups = new GroupBook(); } catch (Exception ex) { AppLog.Error("Группы недоступны", ex); }
-        try { chats = new ChatStore(); } catch (Exception ex) { AppLog.Error("История чата недоступна", ex); notice = Join(notice, "История чата недоступна: " + ex.Message); }
+        try { chats = new ChatStore(limit: settings.ChatLimitMb * 1024L * 1024); } catch (Exception ex) { AppLog.Error("История чата недоступна", ex); notice = Join(notice, "История чата недоступна: " + ex.Message); }
         try { contacts = new ContactBook(); }
         catch (ContactBookCorruptException ex)
         {
@@ -157,6 +162,7 @@ public sealed partial class MainForm : Form
             AppLog.Error("Не удалось загрузить контакты", ex);
             SetDelivery("Контакты недоступны", false); SetHint(ex.Message + " Файл контактов не изменён; перезапустите Voicecon."); return;
         }
+        Avatars.Load(contacts.Id); UpdateAvatarControls(); UpdateSelfCard();
         if (contacts.UnreadableFriends > 0)
             notice = Join(notice, $"Не удалось прочитать контактов: {contacts.UnreadableFriends}. Они сохранены в файле, но недоступны для звонков. Попросите у этих друзей код заново.");
         try { StartMailbox(); StartPresence(); RefreshContacts(); }
@@ -253,7 +259,7 @@ public sealed partial class MainForm : Form
         selected = conversation; historyLimit = 300;
         if (unread.Remove(conversation.Key)) RefreshContacts();
         if (!previewMode && settings.LastConversation != entry.Key) { settings.LastConversation = entry.Key; if (entry.Kind == ContactKind.Friend) settings.LastFriendId = entry.Id; SaveSettings(); }
-        LoadHistory(); UpdateHeader(); RefreshControls();
+        LoadHistory(); UpdateHeader(); RefreshControls(); MarkConversationRead();
     }
 
     private FriendCard? Friend(string id) => contacts?.Friends.FirstOrDefault(f => f.Id == id);
@@ -344,6 +350,7 @@ public sealed partial class MainForm : Form
     private async Task OnSignal(FriendCard friend, CallSignal signal)
     {
         if (signal.Kind == "msg") { ReceiveMessage(friend, signal); return; }
+        if (signal.Kind == "rcpt") { if (Receipt.Parse(signal.Code) is { } receipt && ReceiptKey(friend, signal.Group) is { } key) ApplyReceipt(key, receipt); return; }
         if (signal.Kind == "offer")
         {
             if (signal.Code is null) return; InviteCode.Decode(signal.Code);
@@ -407,7 +414,8 @@ public sealed partial class MainForm : Form
         if (incomingCall is { } call)
         {
             if (now > call.Deadline) { ClearIncoming(); SetStatus("Пропущенный звонок", call.Friend.Name); }
-            else if (Environment.TickCount64 - lastRing > 3200) PlayRingtone();
+            // The ringtone loops on its own; restart it only if it stopped (for example the output device changed).
+            else if (Environment.TickCount64 - lastRing > 3200 && !sounds.Ringing) PlayRingtone();
         }
         foreach (var expired in outgoingCalls.Values.Where(o => now > o.Deadline).ToArray())
         {
@@ -458,6 +466,17 @@ public sealed partial class MainForm : Form
             SyncMute(); RefreshControls();
         };
         room.ChatReceived += line => { if (room == current) OnChat(line); };
+        room.ReceiptReceived += (_, receipt) => { if (room == current && active is not null) ApplyReceipt(active.Key, receipt); };
+        room.AvatarReceived += (memberId, profile, color, bytes) =>
+        {
+            if (room != current) return;
+            var photo = bytes is null ? null : Avatars.Decode(bytes);
+            // In a one-to-one call the other person is the friend you called (keys were exchanged), so it is kept;
+            // in a group call the claimed profile is not proven, so the picture is shown for this call only.
+            if (OneToOneFriend(current) is { } friend) Avatars.SetFriend(friend.Id, color, photo);
+            else Avatars.SetSession(profile, color, photo);
+        };
+        ShareOwnAvatar();
         room.VideoReceived += (id, name, bytes) => { if (room == current && !current.IsDisposed) ReceiveVideo(id, name, bytes); };
         room.VideoStopped += (id, kind, sequence) => { if (room == current) StopRemoteVideo(id, kind, sequence); };
         room.ParticipantLeft += id => { if (room == current) RemoveVideoParticipant(id); };
@@ -491,7 +510,7 @@ public sealed partial class MainForm : Form
 
     private void EndRoomOnly()
     {
-        StopAllVideo(); var old = room; room = null; old?.Dispose();
+        StopAllVideo(); var old = room; room = null; old?.Dispose(); Avatars.ClearSession();
         outgoingCalls.Clear(); callStarted = null; active = null; presence?.SetInCall(false);
         RefreshContacts(); RefreshControls();
     }
@@ -508,11 +527,19 @@ public sealed partial class MainForm : Form
     private void OnChat(VoiceRoom.ChatLine line)
     {
         chatHistory.Add(line); if (chatHistory.Count > 200) chatHistory.RemoveAt(0);
-        var record = new ChatRecord(line.Id, line.Name, line.Text, line.IsMine, line.Time);
+        var record = new ChatRecord(line.Id, !line.IsMine && room is { } shown ? ShownName(shown, line.Name) : line.Name, line.Text, line.IsMine, line.Time);
         if (active is not null)
         {
             try { chats?.Append(active.Key, record); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AppLog.Error("Не удалось сохранить сообщение", ex); }
+            if (line.IsMine) SetMessageState(active.Key, line.Id, MessageState.Sent);
+            else if (room is { } current)
+            {
+                // Remember who wrote it: a receipt goes back to them now (delivered) and when it is read.
+                var author = OneToOneFriend(current)?.Id ?? (current.ProfileOf(line.From) is { } profile && Friend(profile) is not null ? profile : null);
+                SetMessageState(active.Key, line.Id, MessageState.Received, author); roomAuthors[line.Id] = line.From;
+                SendReceipts(active.Key, [line.Id], read: selected?.Key == active.Key && IsViewing());
+            }
         }
         if (selected?.Key == active?.Key) { chatView.Add(record); ScrollChatToEnd(); }
         if (!line.IsMine && settings.MessageSounds) Cue(NotificationCue.Message);
@@ -533,9 +560,10 @@ public sealed partial class MainForm : Form
             {
                 var part = text.Substring(start, Math.Min(ContactBook.OfflineMessageLimit, text.Length - start));
                 var id = Guid.NewGuid().ToString("N"); var record = new ChatRecord(id, settings.Name, part, true, DateTimeOffset.Now);
+                SetMessageState(conversation.Key, id, MessageState.Sending);
                 StoreMessage(conversation.Key, record);
                 var signal = CallSignal.Create("msg", id, part, group?.Id, group?.Name);
-                _ = DeliverAsync(recipients, signal);
+                _ = DeliverAsync(recipients, signal, conversation.Key);
             }
         }
         catch (Exception ex) { SetHint(ex.Message); }
@@ -546,13 +574,93 @@ public sealed partial class MainForm : Form
         if (conversation.Kind == ContactKind.Friend) return contacts.Friends.Where(f => f.Id == conversation.Id).ToList();
         var group = groups?.Find(conversation.Id); return group is null ? [] : contacts.Friends.Where(f => group.Members.Contains(f.Id)).ToList();
     }
-    private async Task DeliverAsync(IReadOnlyList<FriendCard> recipients, CallSignal signal)
+    private async Task DeliverAsync(IReadOnlyList<FriendCard> recipients, CallSignal signal, string? key = null)
     {
+        var sent = 0;
         foreach (var friend in recipients)
         {
-            try { await mailbox!.SendAsync(friend, signal, keep: true); }
-            catch (Exception ex) { AppLog.Error("Сообщение не доставлено", ex); if (!IsDisposed) SetHint($"Сообщение для {friend.Name} не доставлено: {ex.Message}"); }
+            try { await mailbox!.SendAsync(friend, signal, keep: true); sent++; }
+            catch (Exception ex) { AppLog.Error("Сообщение не доставлено", ex); if (!IsDisposed) SetHint($"Сообщение для {friend.Name} не отправлено: {ex.Message}"); }
         }
+        // One tick once the delivery service holds it; a red mark if nobody could be reached (right-click to send again).
+        if (key is not null && !IsDisposed) SetMessageState(key, signal.Id, sent > 0 ? MessageState.Sent : MessageState.Failed);
+    }
+    /// <summary>Sends a message that failed again, under the same id.</summary>
+    private void Resend(ChatRecord record)
+    {
+        if (selected is not { } conversation || chats?.State(conversation.Key, record.Id) != MessageState.Failed) return;
+        var recipients = MessageRecipients(conversation);
+        if (mailbox is null || recipients.Count == 0) { SetHint("Нет связи с сервисом доставки — попробуйте позже."); return; }
+        var group = conversation.Kind == ContactKind.Group ? groups?.Find(conversation.Id) : null;
+        SetMessageState(conversation.Key, record.Id, MessageState.Sending);
+        _ = DeliverAsync(recipients, CallSignal.Create("msg", record.Id, record.Text, group?.Id, group?.Name), conversation.Key);
+    }
+
+    // ---------------- Delivery and read receipts (ticks) ----------------
+    private readonly Dictionary<string, string> roomAuthors = [];
+    private readonly Dictionary<(string Friend, string? Group, bool Read), List<string>> receiptQueue = [];
+    private readonly System.Windows.Forms.Timer receiptTimer = new() { Interval = 1500 };
+    private void SetMessageState(string key, string id, MessageState state, string? from = null)
+    {
+        if (chats?.SetState(key, id, state, from) == true && selected?.Key == key) chatView.Invalidate();
+    }
+    /// <summary>The window is on screen and in front, so an open conversation counts as read.</summary>
+    private bool IsViewing() => Visible && WindowState != FormWindowState.Minimized && (ContainsFocus || Form.ActiveForm == this);
+    /// <summary>Marks what the open conversation received as read and tells the authors.</summary>
+    private void MarkConversationRead()
+    {
+        if (previewMode || chats is null || selected is not { } conversation || !IsViewing()) return;
+        var ids = chats.WithState(conversation.Key, MessageState.Received).ToList();
+        if (ids.Count > 0) SendReceipts(conversation.Key, ids, read: true);
+    }
+    /// <summary>
+    /// Receipts go straight to the author while you share a call with them; otherwise through the encrypted mailbox,
+    /// batched for a moment so a burst of messages costs one delivery.
+    /// </summary>
+    private void SendReceipts(string key, IReadOnlyList<string> ids, bool read)
+    {
+        if (chats is null) return;
+        var live = room is { IsDisposed: false } current && active?.Key == key ? current : null;
+        var direct = new Dictionary<string, List<string>>();
+        foreach (var id in ids)
+        {
+            if (read) chats.SetState(key, id, MessageState.Seen);
+            if (live is not null && roomAuthors.TryGetValue(id, out var member)) { (direct.TryGetValue(member, out var list) ? list : direct[member] = []).Add(id); continue; }
+            if (chats.Sender(key, id) is not { } friend || Friend(friend) is null) continue;
+            var group = key.StartsWith("g:", StringComparison.Ordinal) ? key[2..] : null;
+            if (read && receiptQueue.TryGetValue((friend, group, false), out var delivered)) delivered.Remove(id);
+            var slot = (friend, group, read); (receiptQueue.TryGetValue(slot, out var queued) ? queued : receiptQueue[slot] = []).Add(id);
+        }
+        foreach (var (member, list) in direct)
+            for (var i = 0; i < list.Count; i += Receipt.MaxIds) live!.SendReceipt(member, new Receipt(read, list.Skip(i).Take(Receipt.MaxIds).ToList()));
+        if (receiptQueue.Count > 0) { receiptTimer.Stop(); receiptTimer.Start(); }
+    }
+    private async Task FlushReceipts()
+    {
+        receiptTimer.Stop();
+        if (mailbox is null) return;
+        var batch = receiptQueue.Where(p => p.Value.Count > 0).ToList(); receiptQueue.Clear();
+        foreach (var ((friendId, groupId, read), ids) in batch)
+        {
+            if (Friend(friendId) is not { } friend) continue;
+            var title = groupId is null ? null : groups?.Find(groupId)?.Name;
+            for (var i = 0; i < ids.Count; i += Receipt.MaxIds)
+            {
+                var receipt = new Receipt(read, ids.Skip(i).Take(Receipt.MaxIds).ToList());
+                try { await mailbox.SendAsync(friend, CallSignal.Create("rcpt", Guid.NewGuid().ToString("N"), receipt.Encode(), groupId, title), keep: true); }
+                catch (Exception ex) { AppLog.Error("Отметка о прочтении не отправлена", ex); }
+            }
+        }
+    }
+    /// <summary>Which conversation a receipt from <paramref name="friend"/> belongs to.</summary>
+    private string? ReceiptKey(FriendCard friend, string? group) => group is null ? "f:" + friend.Id : groups?.Find(group) is { } found ? ConversationForGroup(found).Key : null;
+    /// <summary>A receipt only moves your own messages forward (two ticks, then coloured ticks).</summary>
+    private void ApplyReceipt(string key, Receipt receipt)
+    {
+        if (chats is null) return;
+        foreach (var id in receipt.Ids)
+            if (chats.State(key, id) is MessageState.Sending or MessageState.Sent or MessageState.Delivered or MessageState.Failed)
+                SetMessageState(key, id, receipt.Read ? MessageState.Read : MessageState.Delivered);
     }
     /// <summary>A chat message that arrived through the mailbox (the friend wrote while there was no call).</summary>
     private void ReceiveMessage(FriendCard friend, CallSignal signal)
@@ -562,7 +670,9 @@ public sealed partial class MainForm : Form
         if (signal.Group is { } groupId && groups is not null) key = ConversationForGroup(groups.Find(groupId) ?? groups.Upsert(groupId, signal.Title ?? "Группа", [friend.Id])).Key;
         if (chats?.LoadRecent(key, 400).Any(r => r.Id == signal.Id) == true) return;
         var record = new ChatRecord(signal.Id, friend.Name, text, false, DateTimeOffset.FromUnixTimeSeconds(signal.Time).ToLocalTime());
+        chats?.SetState(key, signal.Id, MessageState.Received, friend.Id);
         StoreMessage(key, record);
+        SendReceipts(key, [signal.Id], read: selected?.Key == key && IsViewing());
         if (selected?.Key != key || !ContainsFocus) { if (selected?.Key != key) unread.Add(key); RefreshContacts(); }
         if (settings.MessageSounds) Cue(NotificationCue.Message);
         if (!Visible || WindowState == FormWindowState.Minimized) tray?.ShowBalloonTip(5000, "Сообщение от " + friend.Name, text.Length > 120 ? text[..120] + "…" : text, ToolTipIcon.None);
@@ -582,7 +692,7 @@ public sealed partial class MainForm : Form
         UpdateChatEmpty(); chatView.SetRecords(records); ScrollChatToEnd();
     }
     private void UpdateChatEmpty() => chatView.EmptyText = selected is null ? "Добавьте друга кнопкой + слева — и здесь появится ваша переписка."
-        : $"Здесь будет история переписки с «{selected.Title}».\nПишите в любое время: если собеседник не в сети, сообщение подождёт его до 12 часов. Хранится только на ваших ПК.";
+        : $"Здесь будет история переписки с «{selected.Title}».\nПишите в любое время: если собеседник не в сети, сообщение подождёт его до 12 часов.";
     private void ScrollChatToEnd() => chatHost.ScrollToEnd();
     private void OpenEmoji()
     {
@@ -644,7 +754,7 @@ public sealed partial class MainForm : Form
     {
         if (room is not { IsDisposed: false } current) return;
         var audio = current.Participants.FirstOrDefault(p => p.Id == person.Id); if (audio is null) return;
-        var popup = new PeerVolumePopup(person.Id, person.Name, current.PingTo(person.Id), audio.VoicePercent, audio.SharePercent, (voice, share) => current.SetParticipantVolume(person.Id, voice, share));
+        var popup = new PeerVolumePopup(person.Avatar ?? person.Id, person.Name, current.PingTo(person.Id), audio.VoicePercent, audio.SharePercent, (voice, share) => current.SetParticipantVolume(person.Id, voice, share));
         popup.Closed += (_, _) => BeginInvoke(new Action(popup.Dispose));
         popup.Show(point);
     }
@@ -718,8 +828,23 @@ public sealed partial class MainForm : Form
     /// exchanged), so they are shown under the name you saved, whatever name their app announces.
     /// In group calls the announced name is shown.
     /// </summary>
-    private string ShownName(VoiceRoom current, string announced) =>
-        active is { Kind: ContactKind.Friend } conversation && current.People.Count == 1 && Friend(conversation.Id) is { } friend ? friend.Name : announced;
+    private string ShownName(VoiceRoom current, string announced) => OneToOneFriend(current)?.Name ?? announced;
+    private FriendCard? OneToOneFriend(VoiceRoom current) => active is { Kind: ContactKind.Friend } conversation && current.People.Count == 1 ? Friend(conversation.Id) : null;
+    /// <summary>Which avatar a participant shows: the friend in a one-to-one call, else the profile they announced.</summary>
+    private string AvatarIdFor(VoiceRoom current, string memberId) => OneToOneFriend(current)?.Id ?? current.ProfileOf(memberId) ?? memberId;
+    /// <summary>Sends our avatar to the people in the current call.</summary>
+    private void ShareOwnAvatar()
+    {
+        if (room is not { IsDisposed: false } current || contacts is null) return;
+        var own = Avatars.Get(contacts.Id); byte[]? photo = null;
+        try { if (own?.Photo is { } picture) photo = Avatars.Share(picture); } catch (Exception ex) when (ex is ExternalException or ArgumentException) { AppLog.Error("Фото аватарки не подготовлено", ex); }
+        current.SetOwnAvatar(contacts.Id, own?.Color, photo);
+    }
+    private void OnAvatarsChanged()
+    {
+        if (IsDisposed) return;
+        contactList.Invalidate(); header.Invalidate(); selfCard.Invalidate(); callStrip.Invalidate(); avatarPreview.Invalidate();
+    }
     private void UpdateStrip()
     {
         var chips = new List<CallStrip.Chip>();
@@ -727,7 +852,7 @@ public sealed partial class MainForm : Form
         {
             if (capture.ScreenActive) chips.Add(new CallStrip.OwnStreamChip(1, current.ViewerCount(1), capture.ScreenSize.Height > 0 ? $"{capture.ScreenSize.Height}p · {capture.Fps} к/с" : ""));
             if (capture.CameraActive) chips.Add(new CallStrip.OwnStreamChip(2, current.ViewerCount(2), ""));
-            foreach (var person in current.People) chips.Add(new CallStrip.PersonChip(person.Id, ShownName(current, person.Name), person.Connected, person.Connected ? current.PingTo(person.Id) : null));
+            foreach (var person in current.People) chips.Add(new CallStrip.PersonChip(person.Id, ShownName(current, person.Name), person.Connected, person.Connected ? current.PingTo(person.Id) : null, AvatarIdFor(current, person.Id)));
             foreach (var stream in current.RemoteStreams) chips.Add(new CallStrip.RemoteStreamChip(stream.PeerId, ShownName(current, stream.Name), stream.Kind, streamWindows.ContainsKey(stream.PeerId + ":" + stream.Kind)));
         }
         else if (previewChips.Count > 0) chips.AddRange(previewChips);
@@ -749,7 +874,7 @@ public sealed partial class MainForm : Form
         if (!string.IsNullOrWhiteSpace(name.Text)) settings.Name = name.Text.Trim(); else name.Text = settings.Name;
         settings.Microphone = (microphones.SelectedItem as Device)?.Name ?? settings.Microphone;
         settings.Speakers = (speakers.SelectedItem as Device)?.Name ?? settings.Speakers;
-        if (oldName != settings.Name) UpdateSelfCard();
+        if (oldName != settings.Name) { UpdateSelfCard(); UpdateAvatarControls(); }
         settingsTimer.Stop(); settingsTimer.Start();
     }
     private void PersistSettings() { if (previewMode) return; try { settings.Save(); } catch (Exception ex) { SetHint("Не удалось сохранить настройки: " + ex.Message); } }

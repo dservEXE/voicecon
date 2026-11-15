@@ -25,6 +25,11 @@ internal static class FeatureChecks
         Require(b.Open(a.Seal(bob, new CallSignal("msg", id, DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 10 * 3600, "ждёт"))) is not null, "Waiting message accepted");
         Require(b.Open(a.Seal(bob, new CallSignal("msg", id, DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 14 * 3600, "старое"))) is null, "Stale message dropped");
         Require(b.Open(a.Seal(bob, new CallSignal("msg", id, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), "ab"))) ?.Signal.Code == "ab", "Control characters stripped");
+        var ids = Enumerable.Range(0, Receipt.MaxIds).Select(_ => Guid.NewGuid().ToString("N")).ToList();
+        var receiptMail = a.Seal(bob, CallSignal.Create("rcpt", id, new Receipt(true, ids).Encode(), Guid.NewGuid().ToString("N"), "Команда"));
+        Require(System.Text.Encoding.UTF8.GetByteCount(receiptMail) < 4000 && b.Open(receiptMail) is { } openedReceipt && Receipt.Parse(openedReceipt.Signal.Code) is { Read: true } parsed && parsed.Ids.SequenceEqual(ids), "A full read receipt fits the delivery limit and round-trips");
+        Require(b.Open(a.Seal(bob, CallSignal.Create("rcpt", id, "x:" + ids[0]))) is null && b.Open(a.Seal(bob, CallSignal.Create("rcpt", id, "d:not-an-id"))) is null && Receipt.Parse("d:" + string.Join(',', ids.Append(ids[0]))) is null, "Malformed receipts are dropped");
+        Require(b.Open(a.Seal(bob, new CallSignal("rcpt", id, DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 10 * 3600, "d:" + ids[0]))) is not null, "A receipt may wait on the service like a message");
         using (var reload = new ContactBook(profiles.First)) Require(reload.Id == a.Id && reload.Friends.Count == 1, "DPAPI identity and contact persistence");
         using var bitmap = new Bitmap(1920, 1080); using (var graphics = Graphics.FromImage(bitmap)) { graphics.Clear(Color.CornflowerBlue); graphics.FillRectangle(Brushes.Gold, 300, 100, 500, 300); }
         var packet = VideoCodec.Encode(bitmap, 2, 123, 1280, 720); using var decoded = VideoCodec.Decode(packet);
