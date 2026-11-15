@@ -54,13 +54,46 @@ public static class MediaRuntime
     {
         var info = new ProcessStartInfo(Executable) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = input, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var a in args) info.ArgumentList.Add(a);
-        var p = new Process { StartInfo = info, EnableRaisingEvents = true }; p.Start(); children[p.Id] = p; return p;
+        var p = new Process { StartInfo = info, EnableRaisingEvents = true }; p.Start(); children[p.Id] = p;
+        try { if (job.Value is { } handle && handle != IntPtr.Zero) AssignProcessToJobObject(handle, p.Handle); } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        return p;
     }
+    /// <summary>Stops every helper still running (used when the call ends and nothing should be encoding or decoding).</summary>
+    public static void StopAll() { foreach (var pair in children.ToArray()) Stop(pair.Value); }
+
+    // Helpers live in a job that closes with Voicecon: even if Voicecon crashes, no encoder is left capturing or sending.
+    private static readonly Lazy<IntPtr> job = new(CreateJob);
+    private static IntPtr CreateJob()
+    {
+        var handle = CreateJobObject(IntPtr.Zero, null); if (handle == IntPtr.Zero) return IntPtr.Zero;
+        var info = new ExtendedLimits { Basic = new BasicLimits { LimitFlags = 0x2000 } }; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        var size = System.Runtime.InteropServices.Marshal.SizeOf<ExtendedLimits>(); var buffer = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+        try { System.Runtime.InteropServices.Marshal.StructureToPtr(info, buffer, false); if (!SetInformationJobObject(handle, 9, buffer, (uint)size)) { CloseHandle(handle); return IntPtr.Zero; } }
+        finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buffer); }
+        return handle; // Kept open for the life of the process; Windows closes it (and ends the helpers) on exit.
+    }
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct BasicLimits { public long PerProcessUserTimeLimit, PerJobUserTimeLimit; public uint LimitFlags; public UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize; public uint ActiveProcessLimit; public UIntPtr Affinity; public uint PriorityClass, SchedulingClass; }
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct ExtendedLimits { public BasicLimits Basic; public ulong ReadOperations, WriteOperations, OtherOperations, ReadBytes, WriteBytes, OtherBytes; public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed; }
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] private static extern IntPtr CreateJobObject(IntPtr attributes, string? name);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern bool SetInformationJobObject(IntPtr job, int infoClass, IntPtr info, uint length);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
+    public static bool InJob(Process process) => job.Value != IntPtr.Zero && IsProcessInJob(process.Handle, job.Value, out var inside) && inside;
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
+    /// <summary>Ends a helper and its children. Never throws: stopping a stream must always finish.</summary>
     public static void Stop(Process? process)
     {
-        if (process is null) return; children.TryRemove(process.Id, out _);
-        try { if (!process.HasExited) process.Kill(true); Interlocked.Add(ref retiredCpu, process.TotalProcessorTime.Ticks); } catch (InvalidOperationException) { } finally { process.Dispose(); }
+        if (process is null) return;
+        try { children.TryRemove(process.Id, out _); } catch (InvalidOperationException) { }
+        try { if (!process.HasExited) { process.Kill(true); process.WaitForExit(1500); } } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException or AggregateException) { }
+        try { Interlocked.Add(ref retiredCpu, process.TotalProcessorTime.Ticks); } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
+        process.Dispose();
     }
+    public static bool HasExited(Process process) { try { return process.HasExited; } catch (InvalidOperationException) { return true; } }
+    /// <summary>Helper processes still running (encoders and decoders).</summary>
+    public static int Running => children.Values.Count(p => !HasExited(p));
     public static (long Memory, TimeSpan Cpu) Resources()
     {
         long memory = 0; var cpu = TimeSpan.FromTicks(Interlocked.Read(ref retiredCpu));

@@ -11,8 +11,7 @@ namespace Voicecon;
 /// </summary>
 public sealed class ChatView : Control
 {
-    /// <summary>A laid-out line of the chat. <paramref name="Breaks"/>: positions in <paramref name="Text"/> of line breaks added to split a word too long for a line (left out when copying).</summary>
-    private sealed record Item(bool Day, string Text, RectangleF Bounds, RectangleF TextBounds, ChatRecord? Record, string Header, RectangleF HeaderBounds, int[]? Breaks = null);
+    private sealed record Item(bool Day, string Text, RectangleF Bounds, RectangleF TextBounds, ChatRecord? Record, string Header, RectangleF HeaderBounds);
     private readonly List<ChatRecord> records = [];
     private readonly List<Item> items = [];
     private float contentHeight;
@@ -45,18 +44,13 @@ public sealed class ChatView : Control
         {
             if (e.KeyCode == Keys.Escape) { HideSelector(); Focus(); e.Handled = true; }
             // Nothing selected: Ctrl+C copies the whole message, as before.
-            else if (e.KeyData is (Keys.Control | Keys.C) or (Keys.Control | Keys.Insert) && selecting?.Record is { } record)
-            {
-                var copied = selector.SelectionLength == 0 ? record.Text : SelectedText();
-                if (copied.Length > 0) Clipboard.SetText(copied);
-                e.Handled = true; e.SuppressKeyPress = true;
-            }
+            else if (e.KeyData == (Keys.Control | Keys.C) && selector.SelectionLength == 0 && selecting?.Record is { } record) { Clipboard.SetText(record.Text); e.Handled = true; }
         };
         var menu = ThemeMenuRenderer.CreateMenu();
         menu.Opening += (_, _) =>
         {
             menu.Items.Clear(); var record = selecting?.Record;
-            var copy = menu.Items.Add("Копировать", null, (_, _) => { var copied = SelectedText(); if (copied.Length > 0) Clipboard.SetText(copied); }); copy.Enabled = selector.SelectionLength > 0;
+            var copy = menu.Items.Add("Копировать", null, (_, _) => { if (selector.SelectionLength > 0) Clipboard.SetText(selector.SelectedText); }); copy.Enabled = selector.SelectionLength > 0;
             menu.Items.Add("Выделить всё", null, (_, _) => selector.SelectAll());
             if (record is not null) menu.Items.Add("Копировать сообщение", null, (_, _) => Clipboard.SetText(record.Text));
         };
@@ -78,52 +72,6 @@ public sealed class ChatView : Control
         var local = new Point(press.X - bounds.X, press.Y - bounds.Y);
         SendMessage(selector.Handle, LeftButtonDown, (IntPtr)1, (IntPtr)((local.Y << 16) | (local.X & 0xFFFF)));
         Invalidate(Rectangle.Ceiling(new RectangleF(item.Bounds.X, item.Bounds.Y + offset, item.Bounds.Width, item.Bounds.Height)));
-    }
-    /// <summary>The selected part of the message as it was written: line breaks added only to fit a long word are left out.</summary>
-    internal string SelectedText()
-    {
-        var start = selector.SelectionStart; var length = selector.SelectionLength;
-        if (length <= 0) return "";
-        if (selecting is not { Breaks: { Length: > 0 } breaks } item) return selector.SelectedText;
-        // The box shows the drawn text with "\r\n" for every line break; find where the added ones landed.
-        var added = new HashSet<int>(); var newlines = 0; var next = 0;
-        for (var i = 0; i < item.Text.Length; i++)
-        {
-            if (next < breaks.Length && breaks[next] == i) { added.Add(i + newlines); added.Add(i + newlines + 1); next++; }
-            if (item.Text[i] == '\n') newlines++;
-        }
-        var text = selector.Text; var result = new System.Text.StringBuilder(length);
-        for (var i = start; i < start + length && i < text.Length; i++) if (!added.Contains(i)) result.Append(text[i]);
-        return result.ToString();
-    }
-    /// <summary>
-    /// Splits words too wide for a line (links, long numbers) into pieces that fit, preferring to break after / - ? &amp; = _ . ,
-    /// Returns the text to draw and the positions of the line breaks it added.
-    /// </summary>
-    internal static (string Text, int[] Breaks) BreakLongWords(string text, Font font, int width)
-    {
-        if (width < 16) return (text, []);
-        static int Measure(string s, Font f) => TextRenderer.MeasureText(s, f, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
-        var result = new System.Text.StringBuilder(text.Length + 16); var breaks = new List<int>(); var i = 0;
-        while (i < text.Length)
-        {
-            if (char.IsWhiteSpace(text[i])) { result.Append(text[i++]); continue; }
-            var end = i; while (end < text.Length && !char.IsWhiteSpace(text[end])) end++;
-            var word = text[i..end]; i = end;
-            while (word.Length > 1 && Measure(word, font) > width)
-            {
-                // The longest start of the word that fits, then back to a natural break point if one is near the end.
-                int low = 1, high = word.Length - 1;
-                while (low < high) { var mid = (low + high + 1) / 2; if (Measure(word[..mid], font) <= width) low = mid; else high = mid - 1; }
-                var cut = low;
-                for (var k = low; k > Math.Max(1, low * 2 / 3); k--) if ("/-?&=_.,;:".Contains(word[k - 1])) { cut = k; break; }
-                if (cut > 1 && char.IsHighSurrogate(word[cut - 1])) cut--;
-                result.Append(word, 0, cut); breaks.Add(result.Length); result.Append('\n');
-                word = word[cut..];
-            }
-            result.Append(word);
-        }
-        return breaks.Count == 0 ? (text, []) : (result.ToString(), breaks.ToArray());
     }
     private void HideSelector()
     {
@@ -161,7 +109,8 @@ public sealed class ChatView : Control
     {
         HideSelector(); items.Clear(); laidOutWidth = Width;
         if (Width < 40) { contentHeight = 0; FitHeight(); return; }
-        var s = S; var side = 10 * s; var maxBubble = Math.Max(120 * s, (Width - 2 * side) * 0.74f);
+        var s = S; var side = 10 * s; // Bubbles stop at a readable width (as in messengers), so long messages and links wrap instead of making one long line.
+        var maxBubble = Math.Max(120 * s, Math.Min((Width - 2 * side) * 0.74f, 480 * s));
         var padX = 14 * s; var padY = 8 * s; var y = 10 * s;
         DateTime? day = null; ChatRecord? previous = null;
         foreach (var record in records)
@@ -184,21 +133,12 @@ public sealed class ChatView : Control
                 headerBounds = new RectangleF(side + 6 * s, y, Width - 2 * side - 12 * s, 18 * s); y += 20 * s;
             }
             var text = record.Text.Replace("\r\n", "\n").Replace('\r', '\n');
-            var lineWidth = (int)(maxBubble - 2 * padX);
-            var measured = TextRenderer.MeasureText(text.Length == 0 ? " " : text, MessageFont, new Size(lineWidth, int.MaxValue), Wrap);
-            int[]? breaks = null;
-            if (measured.Width > lineWidth)
-            {
-                // A word wider than the line (usually a link): split it over several lines instead of overflowing.
-                (text, breaks) = BreakLongWords(text, MessageFont, lineWidth - 2);
-                measured = TextRenderer.MeasureText(text, MessageFont, new Size(lineWidth, int.MaxValue), Wrap);
-                measured.Width = Math.Min(measured.Width, lineWidth);
-            }
+            var measured = TextRenderer.MeasureText(text.Length == 0 ? " " : text, MessageFont, new Size((int)(maxBubble - 2 * padX), int.MaxValue), Wrap);
             var ticks = record.Mine ? 24 * s : 0;
             var bubbleW = Math.Max(44 * s, measured.Width + 2 * padX + 2 + ticks); var bubbleH = measured.Height + 2 * padY;
             var x = record.Mine ? Width - side - bubbleW : side;
             var bubble = new RectangleF(x, y, bubbleW, bubbleH);
-            items.Add(new Item(false, text, bubble, new RectangleF(x + padX, y + padY, bubbleW - 2 * padX + 2, measured.Height + 2), record, header, headerBounds, breaks is { Length: > 0 } ? breaks : null));
+            items.Add(new Item(false, text, bubble, new RectangleF(x + padX, y + padY, bubbleW - 2 * padX + 2, measured.Height + 2), record, header, headerBounds));
             y += bubbleH + 8 * s; previous = record;
         }
         contentHeight = y + 10 * s;

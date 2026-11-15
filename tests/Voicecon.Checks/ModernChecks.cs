@@ -37,5 +37,24 @@ internal static class ModernChecks
             Require(error is null && encoded >= 5 && decoded >= 2, $"H264 {fps} fps pipeline failed: {encoded} encoded, {decoded} decoded; {error}; decoder {decoder.Error}");
             Console.WriteLine($"PASS synthetic H.264 target {fps}: {encoded} encoded / {decoded} decoded; backend {encoder.Backend}; no capture devices used");
         }
+        // Stopping a stream leaves no encoder behind: after a normal stop, and when stopped while still starting.
+        var before = MediaRuntime.Running;
+        using (var encoder = new VideoEncoder())
+        {
+            await encoder.StartAsync(new Size(320, 180), new Size(320, 180), 30);
+            var helper = (Process)typeof(VideoEncoder).GetField("process", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(encoder)!;
+            Require(encoder.Running && MediaRuntime.InJob(helper), "A running encoder belongs to Voicecon's job (it ends with Voicecon, even after a crash)");
+            encoder.Dispose(); Require(!encoder.Running, "A stopped encoder reports nothing running");
+            Require(MediaRuntime.Running == before, $"Stopping a stream ends its encoder ({MediaRuntime.Running} helpers running, {before} before)");
+        }
+        for (var delay = 0; delay <= 400; delay += 50)
+        {
+            var encoder = new VideoEncoder(); var start = encoder.StartAsync(new Size(320, 180), new Size(320, 180), 30);
+            await Task.Delay(delay); encoder.Dispose();
+            try { await start; } catch (Exception) { }
+            await Task.Delay(100);
+            Require(MediaRuntime.Running == before, $"Stopping during start (after {delay} ms) leaves no encoder running ({MediaRuntime.Running} helpers, {before} before)");
+        }
+        Console.WriteLine("PASS no encoder left after stopping, including stops during start; helpers end with Voicecon");
     }
 }

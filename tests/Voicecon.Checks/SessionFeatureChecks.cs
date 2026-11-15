@@ -250,35 +250,30 @@ internal static class SessionFeatureChecks
         var tickPixels = 0; for (var y = (int)(bubble.Bottom + offset - 22); y < bubble.Bottom + offset - 4; y++) for (var x = (int)(bubble.Right - 30); x < bubble.Right - 4; x++) { var c = frame.GetPixel(x, y); if (c.G > 190 && c.B > 220 && c.R < 170) tickPixels++; }
         Require(tickPixels > 6, "Read messages show coloured ticks");
     }
-    /// <summary>A link or other word wider than a bubble is split over lines; copying gives it back whole.</summary>
+    /// <summary>Bubbles stop at a readable width: a long link wraps over lines even on a wide window, and stays whole when copied.</summary>
     private static void CheckLongWords()
     {
         const string link = "https://www.faceit.com/ru/matchmaking/f4148ddd-bce8-41b8-9131-ee83afcdd6dd/Europe%205v5%20Queue";
-        var message = "Заходи " + link + " быстрее";
-        using var host = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Location = new Point(-4000, -4000), Size = new Size(440, 400) };
-        var view = new ChatView { Location = Point.Empty, Size = new Size(420, 380) }; host.Controls.Add(view); _ = host.Handle; _ = view.Handle;
-        view.SetRecords([new ChatRecord("a", "max19", message, false, DateTimeOffset.Now.AddMinutes(-1)), new ChatRecord("b", "Вы", link, true, DateTimeOffset.Now)]);
-        var items = ((System.Collections.IList)typeof(ChatView).GetField("items", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!).Cast<object>()
-            .Where(i => (bool)i.GetType().GetProperty("Day")!.GetValue(i)! == false).ToList();
-        foreach (var item in items)
+        foreach (var width in new[] { 1100, 420 })
         {
-            var bubble = (RectangleF)item.GetType().GetProperty("Bounds")!.GetValue(item)!;
-            var shown = (string)item.GetType().GetProperty("Text")!.GetValue(item)!;
-            Require(bubble.Left >= 0 && bubble.Right <= view.Width && bubble.Width <= view.Width * 0.8f, $"A long link stays inside its bubble ({bubble.Left:0}..{bubble.Right:0} of {view.Width})");
-            Require(shown.Contains('\n') && shown.Split('\n', ' ').All(word => TextRenderer.MeasureText(word, ChatView.MessageFont, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width <= bubble.Width), "A long link is split into pieces that fit a line");
+            using var host = new Form { ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Location = new Point(-4000, -4000), Size = new Size(width + 20, 400) };
+            var view = new ChatView { Location = Point.Empty, Size = new Size(width, 380) }; host.Controls.Add(view); _ = host.Handle; _ = view.Handle;
+            view.SetRecords([new ChatRecord("a", "max19", link, false, DateTimeOffset.Now.AddMinutes(-1)), new ChatRecord("b", "Вы", "Заходи " + link, true, DateTimeOffset.Now)]);
+            var items = ((System.Collections.IList)typeof(ChatView).GetField("items", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!).Cast<object>()
+                .Where(i => (bool)i.GetType().GetProperty("Day")!.GetValue(i)! == false).ToList();
+            var line = TextRenderer.MeasureText("Ag", ChatView.MessageFont, Size.Empty, TextFormatFlags.NoPadding).Height;
+            foreach (var item in items)
+            {
+                var bubble = (RectangleF)item.GetType().GetProperty("Bounds")!.GetValue(item)!; var text = (RectangleF)item.GetType().GetProperty("TextBounds")!.GetValue(item)!;
+                Require(bubble.Left >= 0 && bubble.Right <= view.Width && bubble.Width <= 480 + 24 + 4, $"A long link keeps a readable bubble width ({bubble.Width:0} px in a {width} px chat)");
+                Require(text.Height >= 2 * line, $"A long link wraps over several lines ({text.Height:0} px, line {line} px, chat {width} px)");
+            }
+            var first = items[0]; var bounds = (RectangleF)first.GetType().GetProperty("TextBounds")!.GetValue(first)!;
+            var offset = (float)typeof(ChatView).GetProperty("Offset", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
+            typeof(ChatView).GetMethod("BeginSelect", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, [first, new Point((int)bounds.X + 4, (int)(bounds.Y + offset + 6))]);
+            var selector = Get<TextBox>(view, "selector"); selector.SelectAll();
+            Require(selector.SelectedText == link, "A wrapped link is copied whole");
         }
-        var first = items[0]; var text = (RectangleF)first.GetType().GetProperty("TextBounds")!.GetValue(first)!;
-        var offset = (float)typeof(ChatView).GetProperty("Offset", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
-        typeof(ChatView).GetMethod("BeginSelect", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, [first, new Point((int)text.X + 4, (int)(text.Y + offset + 6))]);
-        var selector = Get<TextBox>(view, "selector"); selector.SelectAll();
-        string Selected() => (string)typeof(ChatView).GetMethod("SelectedText", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, [])!;
-        Require(Selected() == message, "Copying a selected split link gives the original text back");
-        var at = selector.Text.IndexOf("matchmaking", StringComparison.Ordinal); var stop = selector.Text.IndexOf("Queue", StringComparison.Ordinal) + 5;
-        selector.Select(at, stop - at); Require(Selected() == link[link.IndexOf("matchmaking", StringComparison.Ordinal)..], "Copying part of a split link leaves out the added line breaks");
-        var (plain, none) = ((string, int[]))typeof(ChatView).GetMethod("BreakLongWords", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, ["Обычное сообщение\nв две строки", ChatView.MessageFont, 200])!;
-        Require(plain == "Обычное сообщение\nв две строки" && none.Length == 0, "Ordinary words are not split");
-        var (emoji, _) = ((string, int[]))typeof(ChatView).GetMethod("BreakLongWords", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [string.Concat(Enumerable.Repeat("😀", 60)), ChatView.MessageFont, 120])!;
-        Require(emoji.Split('\n').All(line => line.Length > 0 && !char.IsHighSurrogate(line[^1]) && !char.IsLowSurrogate(line[0])), "Emoji are never cut in half");
     }
     /// <summary>Clicking your avatar opens its style picker; the settings page no longer has one.</summary>
     private static void CheckAvatarPopup()

@@ -245,6 +245,8 @@ public sealed partial class MainForm
         streamWindows.Clear(); stage.Clear(); SetStage(StageMode.Hidden);
         foreach (var pair in decoders) if (decoders.TryRemove(pair.Key, out var decoder)) decoder.Dispose();
         stoppedSequences.Clear();
+        // The call is over: nothing may still be encoding or decoding.
+        MediaRuntime.StopAll();
     }
     /// <summary>Render-only: a stream on the stage (and optionally the mini view) without a call.</summary>
     internal void ShowPreviewStage(bool mini)

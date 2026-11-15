@@ -77,7 +77,10 @@ public sealed class VideoEncoder : IDisposable
                 if (encoder == "h264_amf") args.AddRange(["-usage", "ultralowlatency"]);
                 if (encoder == "libopenh264") args.AddRange(["-rc_mode", "bitrate", "-allow_skip_frames", "1"]);
                 args.AddRange(["-bsf:v", "h264_metadata=aud=insert", "-flush_packets", "1", "-f", "h264", "pipe:1"]);
-                process = MediaRuntime.Start(args, !desktopOutput.HasValue);
+                // Stopped while an earlier encoder was being tried: start nothing (a helper started now would be left running).
+                stop.Token.ThrowIfCancellationRequested();
+                var started = MediaRuntime.Start(args, !desktopOutput.HasValue);
+                lock (stop) { if (stop.IsCancellationRequested) { MediaRuntime.Stop(started); stop.Token.ThrowIfCancellationRequested(); } process = started; }
                 var errors = process.StandardError.ReadToEndAsync();
                 // Raw-input encoders need one synthetic black frame to initialise hardware; never a screen capture.
                 if (!desktopOutput.HasValue) await process.StandardInput.BaseStream.WriteAsync(new byte[source.Width * source.Height * 4], stop.Token);
@@ -100,11 +103,19 @@ public sealed class VideoEncoder : IDisposable
                 return;
             }
             catch (Exception ex) when (!stop.IsCancellationRequested) { last = ex; MediaRuntime.Stop(process); process = null; }
+            catch { lock (stop) { MediaRuntime.Stop(process); process = null; } throw; }
         }
         throw new IOException("Не удалось запустить H.264: " + last?.Message);
     }
     public void Submit(byte[] bgra) { if (!stop.IsCancellationRequested) raw.Writer.TryWrite(bgra); }
-    public void Dispose() { if (stop.IsCancellationRequested) return; stop.Cancel(); raw.Writer.TryComplete(); MediaRuntime.Stop(process); process = null; }
+    /// <summary>True while an encoder helper process is running for this encoder.</summary>
+    public bool Running { get { lock (stop) return process is { } p && !MediaRuntime.HasExited(p); } }
+    public void Dispose()
+    {
+        Process? old;
+        lock (stop) { if (stop.IsCancellationRequested) return; stop.Cancel(); old = process; process = null; }
+        raw.Writer.TryComplete(); MediaRuntime.Stop(old);
+    }
 }
 public sealed class VideoDecoder : IDisposable
 {

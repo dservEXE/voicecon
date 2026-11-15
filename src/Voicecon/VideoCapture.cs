@@ -102,7 +102,10 @@ public sealed class VideoCapture : IDisposable
     }
     public void StopScreen()
     {
-        var active = screenActive; screenActive = false; screenGeneration++; var old = window; window = null; old?.Dispose(); screenEncoder?.Dispose(); screenEncoder = null;
+        var active = screenActive; screenActive = false; screenGeneration++; var old = window; window = null; var encoder = screenEncoder; screenEncoder = null;
+        // Each part is released on its own, so a failure in one never leaves the encoder running or viewers uninformed.
+        try { old?.Dispose(); } catch (Exception ex) { AppLog.Error("Захват экрана не закрылся", ex); }
+        try { encoder?.Dispose(); } catch (Exception ex) { AppLog.Error("Видеокодировщик не остановился", ex); }
         if (active) Stopped?.Invoke(1, NextSequence());
     }
     public static async Task<IReadOnlyList<MediaFrameSourceGroup>> CamerasAsync()
