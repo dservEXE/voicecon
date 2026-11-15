@@ -198,9 +198,10 @@ internal static class SessionFeatureChecks
         using var form = new MainForm(true, "graphite") { Size = new Size(1300, 820) }; _ = form.Handle; Prepare(form); form.PerformLayout();
         var center = Get<CenterLayout>(form, "center"); var stageCard = Get<SurfacePanel>(form, "stageCard"); var stage = Get<StageView>(form, "stage");
         var chat = center.Controls.Cast<Control>().First(c => c != stageCard);
-        Require(center.Mode == StageMode.Hidden && !stageCard.Visible && chat.Bounds == center.ClientRectangle, "Without streams the chat fills the middle");
+        // The test window is never shown, so layout is checked by bounds, not by Visible.
+        Require(center.Mode == StageMode.Hidden && chat.Bounds == center.ClientRectangle, "Without streams the chat fills the middle");
         Invoke(form, "ShowPreviewStage", false); center.PerformLayout();
-        Require(center.Mode == StageMode.Full && stageCard.Visible && stage.Count == 2 && stageCard.Right <= chat.Left && chat.Width == center.ChatColumnWidth && chat.Height == center.Height && stageCard.Width > chat.Width, "Watching: the stream is large and the chat becomes a column on the right");
+        Require(center.Mode == StageMode.Full && stage.Count == 2 && stageCard.Right <= chat.Left && chat.Width == center.ChatColumnWidth && chat.Height == center.Height && stageCard.Width > chat.Width, "Watching: the stream is large and the chat becomes a column on the right");
         Invoke(form, "SetStage", StageMode.Mini); center.PerformLayout();
         Require(stage.Mode == StageMode.Mini && stageCard.Bottom <= chat.Top && stageCard.Width == center.Width && chat.Height > stageCard.Height, "Collapsed: a mini view above the chat");
         Invoke(form, "SetStage", StageMode.Full); form.Size = form.MinimumSize; form.PerformLayout(); center.PerformLayout();
