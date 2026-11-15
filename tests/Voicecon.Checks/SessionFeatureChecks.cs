@@ -195,21 +195,30 @@ internal static class SessionFeatureChecks
     /// <summary>Watched streams sit in the main window: large with the chat on the right, small above the chat, or below on a narrow window.</summary>
     private static void CheckStage()
     {
-        using var form = new MainForm(true, "graphite") { Size = new Size(1300, 820) }; _ = form.Handle; Prepare(form); form.PerformLayout();
-        var center = Get<CenterLayout>(form, "center"); var stageCard = Get<SurfacePanel>(form, "stageCard"); var stage = Get<StageView>(form, "stage");
-        var chat = center.Controls.Cast<Control>().First(c => c != stageCard);
-        // The test window is never shown, so layout is checked by bounds, not by Visible.
-        Require(center.Mode == StageMode.Hidden && chat.Bounds == center.ClientRectangle, "Without streams the chat fills the middle");
-        Invoke(form, "ShowPreviewStage", false); center.PerformLayout();
-        Require(center.Mode == StageMode.Full && stage.Count == 2 && stageCard.Right <= chat.Left && chat.Width == center.ChatColumnWidth && chat.Height == center.Height && stageCard.Width > chat.Width, $"Watching: the stream is large and the chat becomes a column on the right (mode {center.Mode}, streams {stage.Count}, center {center.Bounds}, stage {stageCard.Bounds}, chat {chat.Bounds}, column {center.ChatColumnWidth}, narrow {center.Narrow})");
-        Invoke(form, "SetStage", StageMode.Mini); center.PerformLayout();
-        Require(stage.Mode == StageMode.Mini && stageCard.Bottom <= chat.Top && stageCard.Width == center.Width && chat.Height > stageCard.Height, "Collapsed: a mini view above the chat");
-        Invoke(form, "SetStage", StageMode.Full); form.Size = form.MinimumSize; form.PerformLayout(); center.PerformLayout();
-        Require(!center.Narrow || stageCard.Bottom <= chat.Top && chat.Height > 100, "On a narrow window the chat goes below the stream");
+        // Layout on its own, at fixed sizes (a CI desktop may be smaller than the window asked for).
+        using (var stagePanel = new Panel()) using (var chatPanel = new Panel()) using (var layout = new CenterLayout(stagePanel, chatPanel) { Size = new Size(1000, 600) })
+        {
+            layout.PerformLayout();
+            Require(chatPanel.Bounds == layout.ClientRectangle, "Without streams the chat fills the middle");
+            layout.Mode = StageMode.Full; layout.PerformLayout();
+            Require(!layout.Narrow && stagePanel.Right <= chatPanel.Left && chatPanel.Width == layout.ChatColumnWidth && chatPanel.Height == 600 && stagePanel.Width > chatPanel.Width, "Watching: the stream is large and the chat becomes a column on the right");
+            layout.Mode = StageMode.Mini; layout.PerformLayout();
+            Require(stagePanel.Bottom <= chatPanel.Top && stagePanel.Width == 1000 && chatPanel.Height > stagePanel.Height, "Collapsed: a mini view above the chat");
+            layout.Mode = StageMode.Full; layout.Size = new Size(700, 600); layout.PerformLayout();
+            Require(layout.Narrow && stagePanel.Bottom <= chatPanel.Top && chatPanel.Height > 100 && stagePanel.Width == 700, "On a narrow window the chat goes below the stream");
+            layout.Mode = StageMode.Hidden; layout.PerformLayout();
+            Require(chatPanel.Bounds == layout.ClientRectangle, "With nothing to watch the chat fills the middle again");
+        }
+        // The window: watching shows the stage, collapsing and the last stream ending put things back.
+        using var form = new MainForm(true, "graphite"); _ = form.Handle; Prepare(form); form.PerformLayout();
+        var center = Get<CenterLayout>(form, "center"); var stage = Get<StageView>(form, "stage");
+        Require(center.Mode == StageMode.Hidden, "No stage before watching");
+        Invoke(form, "ShowPreviewStage", false);
+        Require(center.Mode == StageMode.Full && stage.Mode == StageMode.Full && stage.Count == 2 && stage.Focused == "preview:1", "Watching opens the stage with the chosen stream large");
+        Invoke(form, "SetStage", StageMode.Mini); Require(center.Mode == StageMode.Mini && stage.Mode == StageMode.Mini, "The stage collapses to the mini view");
         stage.Remove("preview:1"); Require(stage.Focused == "preview:2", "Removing the shown stream shows the next one");
-
-        stage.Remove("preview:2"); Invoke(form, "SetStage", StageMode.Full); center.PerformLayout();
-        Require(center.Mode == StageMode.Hidden && chat.Bounds == center.ClientRectangle, "With nothing left to watch the chat fills the middle again");
+        stage.Remove("preview:2"); Invoke(form, "SetStage", StageMode.Full);
+        Require(center.Mode == StageMode.Hidden, "With nothing left to watch the stage goes away");
         var added = new Bitmap(32, 18); stage.ShowFrame("missing", added); var disposed = false; try { _ = added.Width; } catch (ArgumentException) { disposed = true; }
         Require(disposed, "A frame for a stream no longer shown is released");
     }
